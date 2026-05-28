@@ -1,0 +1,49 @@
+# macOS
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+Icon?
+.Spotlight-V100
+.Trashes
+
+# Env / secrets - NEVER commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Node (Electron / Tauri frontend)
+node_modules/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+build/
+.next/
+.cache/
+
+# Rust (Tauri backend)
+target/
+**/*.rs.bk
+
+# Swift / Xcode
+.build/
+DerivedData/
+*.xcuserstate
+*.swiftpm/
+xcuserdata/
+Pods/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
