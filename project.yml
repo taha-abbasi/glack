@@ -1,0 +1,44 @@
+name: Glack
+options:
+  bundleIdPrefix: com.github.taha-abbasi
+  deploymentTarget:
+    macOS: "14.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+  groupSortPosition: top
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: "0.0.1"
+    CURRENT_PROJECT_VERSION: "1"
+
+packages:
+  GRDB:
+    url: https://github.com/groue/GRDB.swift
+    from: 7.10.0
+
+targets:
+  Glack:
+    type: application
+    platform: macOS
+    sources:
+      - path: Glack
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.github.taha-abbasi.glack
+        PRODUCT_NAME: Glack
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Glack
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.social-networking
+        INFOPLIST_KEY_NSHumanReadableCopyright: "MIT © 2026 Taha Abbasi"
+        INFOPLIST_KEY_NSMainStoryboardFile: ""
+        ENABLE_HARDENED_RUNTIME: NO
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
+    dependencies:
+      - package: GRDB
+        product: GRDB
