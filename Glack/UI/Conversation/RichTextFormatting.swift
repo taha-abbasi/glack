@@ -98,6 +98,27 @@ enum RichTextFormatting {
     static func toggleCodeBlock(on tv: NSTextView) {
         guard let storage = tv.textStorage else { return }
         let paraRange = paragraphRange(in: tv)
+
+        // Empty composer or empty paragraph: flip the typing attributes so
+        // the next characters typed pick up the code-block style. Reading
+        // `storage.attribute(at: 0)` on a length-0 storage crashes — issue #1
+        // was this exact case freezing the toolbar.
+        if storage.length == 0 || paraRange.length == 0 {
+            var ta = tv.typingAttributes
+            let isOn = (ta[.glackParagraphKind] as? String) == GlackParagraphKind.codeBlock.rawValue
+            if isOn {
+                ta[.font] = RichTextEditor.defaultFont
+                ta.removeValue(forKey: .backgroundColor)
+                ta.removeValue(forKey: .glackParagraphKind)
+            } else {
+                ta[.font] = RichTextEditor.codeFont
+                ta[.backgroundColor] = NSColor.gray.withAlphaComponent(0.15)
+                ta[.glackParagraphKind] = GlackParagraphKind.codeBlock.rawValue
+            }
+            tv.typingAttributes = ta
+            return
+        }
+
         guard tv.shouldChangeText(in: paraRange, replacementString: nil) else { return }
         let currentKind = storage.attribute(.glackParagraphKind, at: paraRange.location, effectiveRange: nil) as? String
         let on = currentKind != GlackParagraphKind.codeBlock.rawValue
@@ -118,6 +139,29 @@ enum RichTextFormatting {
     static func toggleLinePrefix(_ prefix: String, secondary: Bool, on tv: NSTextView) {
         guard let storage = tv.textStorage else { return }
         let paraRange = paragraphRange(in: tv)
+
+        // Empty composer: there's nothing to wrap, so insert the prefix
+        // glyph (`• ` / `▎ `) directly so the user sees the marker and can
+        // start typing on its line. Same insert semantics as a normal toggle.
+        if storage.length == 0 {
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: RichTextEditor.defaultFont,
+                .foregroundColor: secondary ? NSColor.secondaryLabelColor : NSColor.labelColor
+            ]
+            guard tv.shouldChangeText(in: NSRange(location: 0, length: 0), replacementString: prefix) else { return }
+            storage.replaceCharacters(in: NSRange(location: 0, length: 0),
+                                       with: NSAttributedString(string: prefix, attributes: attrs))
+            tv.didChangeText()
+            tv.setSelectedRange(NSRange(location: (prefix as NSString).length, length: 0))
+            // Reset typing attrs to label color so the user's actual content
+            // doesn't inherit the secondary tint from the marker.
+            tv.typingAttributes = [
+                .font: RichTextEditor.defaultFont,
+                .foregroundColor: NSColor.labelColor
+            ]
+            return
+        }
+
         let ns = tv.string as NSString
         let block = ns.substring(with: paraRange)
         let lines = block.components(separatedBy: "\n")
@@ -158,7 +202,13 @@ enum RichTextFormatting {
 
     /// True if the caret sits inside a paragraph that's been tagged as a
     /// code block — used to make Enter insert a newline instead of sending.
+    /// Also considers the editor's typing attributes so the check is correct
+    /// immediately after the triple-backtick autoformat (when storage is
+    /// empty but typing attrs already carry the kind).
     static func isInsideCodeBlock(_ tv: NSTextView) -> Bool {
+        if (tv.typingAttributes[.glackParagraphKind] as? String) == GlackParagraphKind.codeBlock.rawValue {
+            return true
+        }
         guard let storage = tv.textStorage else { return false }
         let loc = tv.selectedRange().location
         let inspect: Int
@@ -167,6 +217,35 @@ enum RichTextFormatting {
         else { return false }
         let kind = storage.attribute(.glackParagraphKind, at: inspect, effectiveRange: nil) as? String
         return kind == GlackParagraphKind.codeBlock.rawValue
+    }
+
+    /// Slack-style: when the caret is inside a code block AND the current
+    /// line is empty, an extra Enter exits the block. The empty line is
+    /// removed and typing attrs reset to the default style, so the next
+    /// keystroke lands on a fresh paragraph outside the block.
+    /// Returns true if the exit happened (caller should consume the Enter).
+    static func exitCodeBlockIfOnEmptyLine(_ tv: NSTextView) -> Bool {
+        guard isInsideCodeBlock(tv), let storage = tv.textStorage else { return false }
+        let ns = tv.string as NSString
+        let sel = tv.selectedRange()
+        let lineRange = ns.lineRange(for: sel)
+        let lineText = ns.substring(with: lineRange).trimmingCharacters(in: .newlines)
+        guard lineText.isEmpty else { return false }
+        // Strip the empty styled line and replace with a plain newline; the
+        // caret lands after that newline with normal typing attrs.
+        let replacement = NSAttributedString(string: "\n", attributes: [
+            .font: RichTextEditor.defaultFont,
+            .foregroundColor: NSColor.labelColor
+        ])
+        guard tv.shouldChangeText(in: lineRange, replacementString: "\n") else { return false }
+        storage.replaceCharacters(in: lineRange, with: replacement)
+        tv.didChangeText()
+        tv.setSelectedRange(NSRange(location: lineRange.location + 1, length: 0))
+        tv.typingAttributes = [
+            .font: RichTextEditor.defaultFont,
+            .foregroundColor: NSColor.labelColor
+        ]
+        return true
     }
 
     /// If the line at the caret is exactly ``` returns its range; the Enter

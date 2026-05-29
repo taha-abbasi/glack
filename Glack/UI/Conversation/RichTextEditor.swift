@@ -95,14 +95,18 @@ struct RichTextEditor: NSViewRepresentable {
         }
 
         /// Intercept the Return key:
-        ///   * Shift+Return                       → newline (default)
-        ///   * Return inside a code-block paragraph → newline (stay in block)
-        ///   * Return on a line that is exactly ``` → enter code-block mode
-        ///   * Plain Return otherwise               → send
+        ///   * Shift+Return                                    → newline (default)
+        ///   * Return inside a code-block, line is empty       → exit the block
+        ///   * Return inside a code-block, line has content    → newline (stay)
+        ///   * Return on a line that is exactly ```            → enter code-block mode
+        ///   * Plain Return otherwise                          → send
         func textView(_ tv: NSTextView, doCommandBy selector: Selector) -> Bool {
             guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
             if NSEvent.modifierFlags.contains(.shift) { return false }
-            if RichTextFormatting.isInsideCodeBlock(tv) { return false }
+            if RichTextFormatting.isInsideCodeBlock(tv) {
+                if RichTextFormatting.exitCodeBlockIfOnEmptyLine(tv) { return true }
+                return false
+            }
             if let range = RichTextFormatting.tripleBacktickRange(tv) {
                 RichTextFormatting.enterCodeBlock(tv, replacing: range)
                 return true
