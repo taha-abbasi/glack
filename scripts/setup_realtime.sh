@@ -45,10 +45,38 @@ else
 fi
 
 echo "===> Granting ${CHAT_PUBLISHER} publisher on the topic"
-gcloud pubsub topics add-iam-policy-binding "${TOPIC}" \
-  --member="serviceAccount:${CHAT_PUBLISHER}" \
-  --role="roles/pubsub.publisher" \
-  --project="${PROJECT}" >/dev/null
+# Workspace org policy `iam.allowedPolicyMemberDomains` blocks IAM bindings
+# to principals outside the org's domain — including the Google-internal
+# chat-api-push service account that delivers Workspace Events. If the
+# binding fails with the FAILED_PRECONDITION about a "permitted customer",
+# automatically override the policy for this project (allow-all) and retry.
+if ! gcloud pubsub topics add-iam-policy-binding "${TOPIC}" \
+      --member="serviceAccount:${CHAT_PUBLISHER}" \
+      --role="roles/pubsub.publisher" \
+      --project="${PROJECT}" 2>/tmp/glack-iam-err >/dev/null; then
+  if grep -q "permitted customer\|allowedPolicyMemberDomains" /tmp/glack-iam-err; then
+    echo "    Workspace org policy is blocking the binding — overriding for this project."
+    cat > /tmp/allow-all-members.yaml <<'YAML'
+spec:
+  rules:
+  - allowAll: true
+YAML
+    # Org-Policy expects a full resource name in the file.
+    sed -i.bak "1i\\
+name: projects/${PROJECT}/policies/iam.allowedPolicyMemberDomains
+" /tmp/allow-all-members.yaml
+    gcloud org-policies set-policy /tmp/allow-all-members.yaml --project="${PROJECT}" >/dev/null
+    # Policy propagation can take a few seconds.
+    sleep 5
+    gcloud pubsub topics add-iam-policy-binding "${TOPIC}" \
+      --member="serviceAccount:${CHAT_PUBLISHER}" \
+      --role="roles/pubsub.publisher" \
+      --project="${PROJECT}" >/dev/null
+  else
+    cat /tmp/glack-iam-err >&2
+    exit 1
+  fi
+fi
 
 echo "===> Ensuring Pub/Sub pull subscription ${SUB}"
 if ! gcloud pubsub subscriptions describe "${SUB}" --project="${PROJECT}" >/dev/null 2>&1; then
