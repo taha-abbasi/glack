@@ -85,9 +85,28 @@ actor EventsClient {
         guard 200..<300 ~= status else {
             let body = String(data: data, encoding: .utf8) ?? ""
             if status == 404 { throw EventsError.notFound }
+            if status == 409, let name = Self.extractConflictingSubscription(body) {
+                throw EventsError.alreadyExists(conflictingSubscription: name)
+            }
             throw EventsError.http(status: status, body: body)
         }
         return try decoder.decode(T.self, from: data)
+    }
+
+    /// Pull the conflicting subscription name out of a 409 error body. The
+    /// API embeds it at `error.details[].metadata.current_subscription`.
+    private static func extractConflictingSubscription(_ body: String) -> String? {
+        guard let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let err = json["error"] as? [String: Any],
+              let details = err["details"] as? [[String: Any]] else { return nil }
+        for d in details {
+            if let meta = d["metadata"] as? [String: Any],
+               let current = meta["current_subscription"] as? String, !current.isEmpty {
+                return current
+            }
+        }
+        return nil
     }
 
     /// The complete set of Chat event types we want pushed to Pub/Sub.
@@ -111,6 +130,10 @@ actor EventsClient {
 enum EventsError: LocalizedError {
     case http(status: Int, body: String)
     case notFound
+    /// 409 ALREADY_EXISTS — Workspace Events allows at most one subscription
+    /// per (target_resource, user). The conflicting subscription's resource
+    /// name is included so the caller can delete it and retry.
+    case alreadyExists(conflictingSubscription: String)
 
     var errorDescription: String? {
         switch self {
@@ -118,6 +141,8 @@ enum EventsError: LocalizedError {
             return "Workspace Events HTTP \(status): \(body.prefix(500))"
         case .notFound:
             return "Workspace Events subscription not found"
+        case .alreadyExists(let name):
+            return "Workspace Events subscription already exists: \(name)"
         }
     }
 }

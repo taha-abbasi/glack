@@ -102,7 +102,22 @@ final class RealtimeManager {
         if let prev = UserDefaults.standard.string(forKey: storedEventSubKey) {
             try? await EventsClient.shared.deleteSubscription(name: prev)
         }
-        let sub = try await EventsClient.shared.createSubscription(pubsubTopic: topicName)
+        // Self-healing: if a previous session left a stale subscription for
+        // this user (UserDefaults wipe, reinstall, dual-device sign-in,
+        // etc.), Workspace Events 409s on create. Parse the conflicting
+        // name from the error, delete it, retry. Eventual consistency
+        // means we may have to wait a tick between delete and retry.
+        let sub: EventSubscription
+        do {
+            sub = try await EventsClient.shared.createSubscription(pubsubTopic: topicName)
+        } catch EventsError.alreadyExists(let stale) {
+            Log.sync.info("RealtimeManager: clearing stale event sub \(stale, privacy: .public)")
+            try? await EventsClient.shared.deleteSubscription(name: stale)
+            // Workspace Events delete returns immediately but the slot
+            // takes ~5s to free up.
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            sub = try await EventsClient.shared.createSubscription(pubsubTopic: topicName)
+        }
         await MainActor.run {
             self.subscriptionResourceName = sub.name
         }
