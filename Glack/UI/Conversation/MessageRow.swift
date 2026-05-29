@@ -94,6 +94,7 @@ struct MessageRow: View {
 
     private var hoverToolbar: some View {
         HStack(spacing: 0) {
+            // Reaction picker
             Button {
                 pickerOpen.toggle()
             } label: {
@@ -110,20 +111,53 @@ struct MessageRow: View {
                     Task { await Sync.shared.addReaction(messageName: message.id, unicode: emoji) }
                 }
             }
-            if isOwnMessage {
+
+            // Reply in thread — only meaningful when the message is part of
+            // a thread (threadId != nil ⟹ the space supports threads).
+            if let tid = message.threadId, let cb = onOpenThread {
                 Divider().frame(height: 16)
                 Button {
-                    showDeleteConfirm = true
+                    cb(tid)
                 } label: {
-                    Image(systemName: "trash")
+                    Image(systemName: "arrowshape.turn.up.left")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 5)
                 }
                 .buttonStyle(.plain)
-                .help("Delete message")
+                .help("Reply in thread")
             }
+
+            // Overflow menu — Copy text always; Delete on own messages only.
+            Divider().frame(height: 16)
+            Menu {
+                Button {
+                    let text = message.textPlain ?? message.text ?? ""
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                } label: {
+                    Label("Copy message text", systemImage: "doc.on.doc")
+                }
+                if isOwnMessage {
+                    Divider()
+                    Button(role: .destructive) {
+                        showDeleteConfirm = true
+                    } label: {
+                        Label("Delete message", systemImage: "trash")
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More actions")
         }
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 6))
