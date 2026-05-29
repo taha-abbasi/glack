@@ -79,6 +79,7 @@ private struct SignedInView: View {
     @State private var sync = Sync.shared
     @State private var selectedSpaceID: String?
     @State private var paletteOpen: Bool = false
+    @State private var searchOpen: Bool = false
 
     var body: some View {
         NavigationSplitView {
@@ -138,11 +139,15 @@ private struct SignedInView: View {
             unreadObserver.stop()
         }
         .background(
-            Button("Open command palette") { paletteOpen = true }
-                .keyboardShortcut("k", modifiers: .command)
-                .opacity(0)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            ZStack {
+                Button("Open command palette") { paletteOpen = true }
+                    .keyboardShortcut("k", modifiers: .command)
+                Button("Search messages") { searchOpen = true }
+                    .keyboardShortcut("f", modifiers: .command)
+            }
+            .opacity(0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         )
         .sheet(isPresented: $paletteOpen) {
             CommandPaletteView(
@@ -152,6 +157,16 @@ private struct SignedInView: View {
                 currentUserID: session.currentUserID,
                 selectedSpaceID: $selectedSpaceID,
                 isPresented: $paletteOpen
+            )
+        }
+        .sheet(isPresented: $searchOpen) {
+            SearchView(
+                usersObserver: usersObserver,
+                spacesObserver: spacesObserver,
+                membersObserver: membersObserver,
+                currentUserID: session.currentUserID,
+                selectedSpaceID: $selectedSpaceID,
+                isPresented: $searchOpen
             )
         }
     }
