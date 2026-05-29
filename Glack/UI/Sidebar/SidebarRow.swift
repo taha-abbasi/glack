@@ -38,6 +38,7 @@ struct SidebarRow: View {
     }
 
     private var icon: String {
+        if space.singleUserBotDm == true { return "puzzlepiece.extension.fill" }
         switch space.type {
         case .directMessage:  return "person.crop.circle"
         case .groupChat:      return "person.2"
@@ -48,6 +49,14 @@ struct SidebarRow: View {
 
     private var displayName: String {
         if let dn = space.displayName, !dn.isEmpty { return dn }
+        // App DMs (Giphy, Drive, etc.) — Chat API doesn't expose bot names
+        // through user-auth member listings. Show "App" + the bot's ID tail
+        // so each is at least distinguishable.
+        if space.singleUserBotDm == true {
+            let otherIDs = otherMemberIDs
+            if let id = otherIDs.first { return "App \(String(id.suffix(4)))" }
+            return "App"
+        }
         // No server-provided name — derive from members for DMs / group chats.
         let otherIDs = otherMemberIDs
         if !otherIDs.isEmpty {

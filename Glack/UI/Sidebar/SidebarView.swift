@@ -39,6 +39,15 @@ struct SidebarView: View {
                     }
                 }
             }
+
+            if !groups.apps.isEmpty {
+                Section("Apps") {
+                    ForEach(groups.apps) { space in
+                        SidebarRow(space: space, users: users, members: members, currentUserID: currentUserID)
+                            .tag(space.id as String?)
+                    }
+                }
+            }
         }
         .listStyle(.sidebar)
     }
@@ -46,6 +55,7 @@ struct SidebarView: View {
     private struct Grouped {
         var dms: [SpaceRecord]
         var spaces: [SpaceRecord]
+        var apps: [SpaceRecord]
     }
 
     /// Slack-style grouping that matches Google Chat's own web UI.
@@ -60,7 +70,14 @@ struct SidebarView: View {
     private func grouped(_ all: [SpaceRecord]) -> Grouped {
         var dms: [SpaceRecord] = []
         var spaces: [SpaceRecord] = []
+        var apps: [SpaceRecord] = []
         for s in all {
+            // 1:1 bot DMs (Giphy, Google Drive, etc.) go in the Apps section
+            // matching Google Chat's own web UI.
+            if s.singleUserBotDm == true {
+                apps.append(s)
+                continue
+            }
             switch s.type {
             case .directMessage, .groupChat:
                 dms.append(s)
@@ -70,6 +87,6 @@ struct SidebarView: View {
                 spaces.append(s)
             }
         }
-        return Grouped(dms: dms, spaces: spaces)
+        return Grouped(dms: dms, spaces: spaces, apps: apps)
     }
 }

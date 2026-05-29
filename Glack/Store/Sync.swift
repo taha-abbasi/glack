@@ -65,6 +65,7 @@ final class Sync {
         }
         // Directory sync LAST — by now we have member/sender IDs to batchGet on.
         await syncDirectoryPeople()
+        await resolveBotNames()
         lastSyncedAt = Date()
     }
 
@@ -316,6 +317,99 @@ final class Sync {
             }
         }
         Log.sync.info("photo enrichment: resolved \(resolved)/\(userIDs.count) real photos via Admin SDK users.photos.get")
+    }
+
+    /// Chat API doesn't expose bot identities via user-auth member listings —
+    /// `sender.displayName` is empty even for bot senders. This walks each
+    /// singleUserBotDm space's oldest messages looking for the bot's
+    /// self-introduction ("Welcome to X", "Thanks for chatting with X", etc.)
+    /// and stores the extracted name on the bot's user row so the sidebar
+    /// can render "Google Drive" instead of "App 7205".
+    private func resolveBotNames() async {
+        do {
+            // (botUserID, oldestText) pairs across all bot DMs. Order by
+            // createdAt ASC so we prioritize the bot's welcome/intro message
+            // over later notifications (which often lack the bot's own name).
+            let samples = try await Database.shared.read { db -> [(String, String)] in
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT m.senderId, m.text
+                    FROM message m
+                    JOIN space s ON s.id = m.spaceId
+                    JOIN member mb ON mb.spaceId = s.id
+                    WHERE s.singleUserBotDm = 1
+                      AND m.senderId IS NOT NULL
+                      AND m.text IS NOT NULL
+                      AND m.senderId = mb.userId
+                    ORDER BY m.createdAt ASC
+                """)
+                return rows.compactMap { row in
+                    guard let id: String = row["senderId"],
+                          let text: String = row["text"] else { return nil }
+                    return (id, text)
+                }
+            }
+            // For each bot, try every sample text until one yields a name —
+            // welcome message might not be in our local backfill yet, but a
+            // later notification might still mention the bot name.
+            var nameByBot: [String: String] = [:]
+            for (id, text) in samples {
+                guard nameByBot[id] == nil, !text.isEmpty else { continue }
+                if let name = Self.extractBotName(from: text) {
+                    nameByBot[id] = name
+                }
+            }
+            let resolvedNames: [(String, String)] = nameByBot.map { ($0.key, $0.value) }
+            try await Database.shared.write { db in
+                for (botID, name) in resolvedNames {
+                    if var record = try UserRecord.fetchOne(db, key: botID) {
+                        guard record.displayName?.isEmpty ?? true else { continue }
+                        record.displayName = name
+                        try record.update(db)
+                    } else {
+                        var fresh = UserRecord(
+                            id: botID, displayName: name,
+                            givenName: nil, familyName: nil,
+                            photoUrl: nil, email: nil,
+                            lastSyncedAt: Date()
+                        )
+                        try fresh.insert(db)
+                    }
+                }
+            }
+            if !resolvedNames.isEmpty {
+                Log.sync.info("resolved \(resolvedNames.count) bot name(s) from welcome messages")
+            }
+        } catch {
+            Log.sync.error("resolveBotNames failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    nonisolated private static func extractBotName(from text: String) -> String? {
+        // Patterns ordered by specificity. First match wins.
+        let patterns: [String] = [
+            #"Welcome to (?:the )?([A-Za-z0-9 .'-]+?) (?:app|bot)"#,  // "Welcome to the Google Drive app!" OR "Welcome to Polly!"
+            #"Thanks for chatting with ([A-Za-z0-9 .'-]+)[!.]"#,       // "Thanks for chatting with GIPHY!"
+            #"(?:Hi|Hello|Greetings)[!,]?\s*I'?m\s+([A-Za-z0-9 .'-]+?)[!.,]"#, // "Hi, I'm Calendly!"
+            #"I'?m\s+(.+?),\s+(?:your|the)"#,                          // "I'm Meet, your meeting helper"
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            guard let match = regex.firstMatch(in: text, range: range),
+                  match.numberOfRanges >= 2,
+                  let r = Range(match.range(at: 1), in: text) else { continue }
+            var name = String(text[r]).trimmingCharacters(in: .whitespacesAndNewlines)
+            // Title-case common all-caps names (GIPHY → Giphy).
+            if name == name.uppercased() && name.count > 1 {
+                name = name.lowercased().capitalized
+            }
+            // Tighten — drop trailing fluff like " app".
+            if let appRange = name.range(of: " app$", options: [.regularExpression, .caseInsensitive]) {
+                name = String(name[..<appRange.lowerBound])
+            }
+            return name.isEmpty ? nil : name
+        }
+        return nil
     }
 
     /// `~/Library/Application Support/Glack/avatars/` — created on first use.
