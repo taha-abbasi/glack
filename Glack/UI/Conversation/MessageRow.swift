@@ -15,6 +15,17 @@ struct MessageRow: View {
     @State private var rowHovering: Bool = false
     @State private var toolbarHovering: Bool = false
     @State private var pickerOpen: Bool = false
+    @State private var showDeleteConfirm: Bool = false
+    @State private var deleteError: String?
+
+    private var isOwnMessage: Bool {
+        guard let me = Session.shared.currentUserID, let sid = message.senderId else { return false }
+        return me == sid
+    }
+
+    private var hasThreadReplies: Bool {
+        (threadReplyCount ?? 0) > 1
+    }
 
     /// True when the cursor is over either the row or the floating toolbar.
     /// Combining both prevents the toolbar from disappearing in the gap when
@@ -99,6 +110,20 @@ struct MessageRow: View {
                     Task { await Sync.shared.addReaction(messageName: message.id, unicode: emoji) }
                 }
             }
+            if isOwnMessage {
+                Divider().frame(height: 16)
+                Button {
+                    showDeleteConfirm = true
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                }
+                .buttonStyle(.plain)
+                .help("Delete message")
+            }
         }
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -107,6 +132,37 @@ struct MessageRow: View {
                 .stroke(Color.gray.opacity(0.25), lineWidth: 0.5)
         )
         .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
+        .confirmationDialog(
+            hasThreadReplies ? "Delete this message and its replies?" : "Delete this message?",
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                let force = hasThreadReplies
+                Task {
+                    do {
+                        try await Sync.shared.deleteMessage(messageName: message.id, force: force)
+                    } catch {
+                        deleteError = "Couldn't delete: \(error.localizedDescription)"
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if hasThreadReplies {
+                Text("This will also delete \(threadReplyCount! - 1) thread \(threadReplyCount! - 1 == 1 ? "reply" : "replies"). This can't be undone.")
+            } else {
+                Text("This can't be undone.")
+            }
+        }
+        .alert("Delete failed", isPresented: Binding(
+            get: { deleteError != nil },
+            set: { if !$0 { deleteError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deleteError ?? "")
+        }
     }
 
     // MARK: - Avatar / name / time

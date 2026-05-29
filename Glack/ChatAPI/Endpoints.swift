@@ -21,6 +21,16 @@ enum ChatEndpoint {
         base.appendingPathComponent("\(messageName)/reactions")
     }
 
+    /// DELETE a message you authored. With `force=true`, the API also deletes
+    /// the thread replies (destructive — used only when explicitly confirmed).
+    static func deleteMessage(messageName: String, force: Bool = false) -> URL {
+        let path = base.appendingPathComponent(messageName)
+        guard force else { return path }
+        var comps = URLComponents(url: path, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "force", value: "true")]
+        return comps.url!
+    }
+
     /// POST a new message to a space. When `threadReply` is true, the URL
     /// carries `messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD` so
     /// the message attaches to the thread named in the request body — Chat

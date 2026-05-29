@@ -62,6 +62,23 @@ actor ChatAPIClient {
         return try await postJSON(url, body: body)
     }
 
+    /// Delete a message you authored. Pass `force: true` to also delete the
+    /// thread replies (Chat returns 400 otherwise when the message has any).
+    func deleteMessage(messageName: String, force: Bool = false) async throws {
+        let url = ChatEndpoint.deleteMessage(messageName: messageName, force: force)
+        let token = try await Session.shared.accessToken()
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, resp) = try await session.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard 200..<300 ~= status else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ChatAPIError.http(status: status, body: body)
+        }
+    }
+
     /// Add a Unicode emoji reaction to a message. Returns the created Reaction.
     /// `messageName` is the full resource path `spaces/X/messages/Y`.
     func addUnicodeReaction(messageName: String, unicode: String) async throws -> GReaction {

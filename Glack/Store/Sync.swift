@@ -88,6 +88,37 @@ final class Sync {
         await syncMembers(spaceID: spaceID)
     }
 
+    /// Delete a message authored by the signed-in user. Marks `deletedAt`
+    /// locally so the row vanishes immediately (the observer filters it
+    /// out); if the API call fails, restores the row. On success drops the
+    /// row entirely. `force=true` is destructive — sends only when the
+    /// caller has explicitly confirmed deleting thread replies.
+    func deleteMessage(messageName: String, force: Bool = false) async throws {
+        let now = Date()
+        try await Database.shared.write { db in
+            try db.execute(
+                sql: "UPDATE message SET deletedAt = ? WHERE id = ?",
+                arguments: [now, messageName]
+            )
+        }
+        do {
+            try await ChatAPIClient.shared.deleteMessage(messageName: messageName, force: force)
+            try await Database.shared.write { db in
+                try MessageRecord.deleteOne(db, key: messageName)
+            }
+            Log.sync.info("deleteMessage \(messageName, privacy: .public) ok force=\(force ? "true" : "false", privacy: .public)")
+        } catch {
+            try? await Database.shared.write { db in
+                try db.execute(
+                    sql: "UPDATE message SET deletedAt = NULL WHERE id = ?",
+                    arguments: [messageName]
+                )
+            }
+            Log.sync.error("deleteMessage \(messageName, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+    }
+
     /// Add a Unicode emoji reaction to a message and refresh the visible
     /// space so the summary chip strip updates without waiting on the
     /// 30-second poll.
