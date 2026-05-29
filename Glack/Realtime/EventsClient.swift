@@ -23,19 +23,28 @@ actor EventsClient {
     }
 
     /// Create a subscription that watches Chat events for every space the
-    /// caller belongs to and delivers them to the named Pub/Sub topic. The
-    /// returned subscription has a `name` field which the caller must store
-    /// so it can be deleted on sign-out.
+    /// authenticated user belongs to and delivers them to the named Pub/Sub
+    /// topic. The wildcard `spaces/-` target is the one-subscription pattern
+    /// — Workspace Events scopes it to the calling user's membership. The
+    /// `users/me/spaces/-` and `users/{id}/spaces/-` patterns are both
+    /// rejected (Chat API conventions don't apply here).
+    ///
+    /// Workspace Events wraps the new subscription in a long-running
+    /// `Operation`; we unwrap `response` to extract the real Subscription.
     func createSubscription(pubsubTopic: String) async throws -> EventSubscription {
         let body = CreateSubscriptionBody(
-            targetResource: "//chat.googleapis.com/users/me/spaces/-",
+            targetResource: "//chat.googleapis.com/spaces/-",
             eventTypes: Self.eventTypes,
             payloadOptions: PayloadOptions(includeResource: true),
             notificationEndpoint: NotificationEndpoint(pubsubTopic: pubsubTopic)
         )
         let url = base.appendingPathComponent("subscriptions")
         let req = try await makeRequest(url: url, method: "POST", body: body)
-        return try await send(req)
+        let op: OperationEnvelope<EventSubscription> = try await send(req)
+        guard let sub = op.response else {
+            throw EventsError.http(status: 500, body: "Subscription operation returned without response payload")
+        }
+        return sub
     }
 
     /// Delete a subscription by its full resource name.
@@ -134,4 +143,13 @@ struct EventSubscription: Decodable {
     let eventTypes: [String]?
     let state: String?
     let expireTime: String?
+}
+
+/// Workspace Events LROs come back wrapped in this envelope. For our
+/// create/delete operations the response is synchronous (`done: true` on
+/// first call), so we just unwrap `response`.
+struct OperationEnvelope<T: Decodable>: Decodable {
+    let name: String?
+    let done: Bool?
+    let response: T?
 }

@@ -34,6 +34,15 @@ final class RealtimeManager {
     /// process restart.
     private let storedEventSubKey = "Glack.WorkspaceEventsSubscription"
 
+    enum RealtimeError: LocalizedError {
+        case notSignedIn
+        var errorDescription: String? {
+            switch self {
+            case .notSignedIn: return "Realtime: no signed-in user yet"
+            }
+        }
+    }
+
     func start() {
         guard !isRunning else { return }
         isRunning = true
