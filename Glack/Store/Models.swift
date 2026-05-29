@@ -80,6 +80,21 @@ struct MessageRecord: Codable, FetchableRecord, MutablePersistableRecord, Identi
               let data = json.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode([GEmojiReactionSummary].self, from: data)) ?? []
     }
+
+    /// True for the parent message of a thread, OR for any message that isn't
+    /// in a thread at all. Chat encodes message IDs as `spaces/X/messages/{base}.{tail}`
+    /// where `base` matches the thread's ID suffix and `tail` differs for each
+    /// reply. The parent uniquely has `tail == base`, so `id` ends with
+    /// `/messages/{base}.{base}`. We use this to hide replies from the main
+    /// conversation view (Slack / Chat web both collapse replies into the
+    /// "View thread" affordance).
+    var isThreadParent: Bool {
+        guard let threadId else { return true }
+        // threadId: "spaces/X/threads/{base}". Pull out `{base}`.
+        guard let slash = threadId.range(of: "/threads/") else { return false }
+        let base = String(threadId[slash.upperBound...])
+        return id.hasSuffix("/messages/\(base).\(base)")
+    }
 }
 
 struct UserRecord: Codable, FetchableRecord, MutablePersistableRecord, Identifiable, Hashable {

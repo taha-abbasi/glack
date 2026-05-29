@@ -298,10 +298,21 @@ final class MessagesObserver {
         self.spaceID = spaceID
         messages = []
         task?.cancel()
+        // Hide thread replies from the main view — replies live in the
+        // thread side panel only, exactly like Slack and Chat web. Parents
+        // are kept (their id matches `messages/{base}.{base}` where base is
+        // the thread's suffix). Pending optimistic sends are kept so the
+        // sender still sees their message land.
         let observation = ValueObservation.tracking { db in
             try MessageRecord
                 .filter(MessageRecord.Columns.spaceId == spaceID)
                 .filter(MessageRecord.Columns.deletedAt == nil)
+                .filter(SQL("""
+                    threadId IS NULL
+                    OR id LIKE 'pending-%'
+                    OR id = REPLACE(threadId, '/threads/', '/messages/') || '.'
+                          || substr(threadId, instr(threadId, '/threads/') + 9)
+                """))
                 .order(MessageRecord.Columns.createdAt.asc)
                 .limit(500)
                 .fetchAll(db)
