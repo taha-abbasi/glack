@@ -66,12 +66,23 @@ YAML
 name: projects/${PROJECT}/policies/iam.allowedPolicyMemberDomains
 " /tmp/allow-all-members.yaml
     gcloud org-policies set-policy /tmp/allow-all-members.yaml --project="${PROJECT}" >/dev/null
-    # Policy propagation can take a few seconds.
-    sleep 5
-    gcloud pubsub topics add-iam-policy-binding "${TOPIC}" \
-      --member="serviceAccount:${CHAT_PUBLISHER}" \
-      --role="roles/pubsub.publisher" \
-      --project="${PROJECT}" >/dev/null
+    # Org policy propagation can take up to ~60s. Retry the binding with
+    # backoff until it sticks (or 5 min cumulative).
+    echo "    Waiting for org policy propagation (up to 5 min)..."
+    attempts=0
+    until gcloud pubsub topics add-iam-policy-binding "${TOPIC}" \
+            --member="serviceAccount:${CHAT_PUBLISHER}" \
+            --role="roles/pubsub.publisher" \
+            --project="${PROJECT}" >/dev/null 2>&1; do
+      attempts=$((attempts + 1))
+      if [ $attempts -ge 10 ]; then
+        echo "    Binding still failing after 5 min — re-run the script in a few minutes."
+        exit 1
+      fi
+      sleep 30
+      echo "    ...still waiting (attempt $attempts/10)"
+    done
+    echo "    Binding succeeded."
   else
     cat /tmp/glack-iam-err >&2
     exit 1
