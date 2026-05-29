@@ -214,24 +214,24 @@ final class OAuthClient: NSObject {
 
     // MARK: - PKCE / random helpers
 
-    private static func makeCodeVerifier() -> String {
+    nonisolated static func makeCodeVerifier() -> String {
         var bytes = [UInt8](repeating: 0, count: 64)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         return Data(bytes).base64URLEncodedString()
     }
 
-    private static func codeChallenge(for verifier: String) -> String {
+    nonisolated static func codeChallenge(for verifier: String) -> String {
         let hash = SHA256.hash(data: Data(verifier.utf8))
         return Data(hash).base64URLEncodedString()
     }
 
-    private static func randomURLSafe(length: Int) -> String {
+    nonisolated static func randomURLSafe(length: Int) -> String {
         var bytes = [UInt8](repeating: 0, count: length)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         return Data(bytes).base64URLEncodedString()
     }
 
-    private static func formEncode(_ dict: [String: String]) -> String {
+    nonisolated static func formEncode(_ dict: [String: String]) -> String {
         var allowed = CharacterSet.urlQueryAllowed
         allowed.remove(charactersIn: "+&=?")
         return dict.map { key, value in
@@ -253,7 +253,7 @@ extension OAuthClient: ASWebAuthenticationPresentationContextProviding {
 }
 
 extension Data {
-    fileprivate func base64URLEncodedString() -> String {
+    func base64URLEncodedString() -> String {
         base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")

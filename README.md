@@ -52,6 +52,20 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 `Glack.xcodeproj` is gitignored — edit `project.yml` instead, regenerate to apply.
 
+## Test
+
+```sh
+./scripts/test.sh
+```
+
+Uses **Swift Testing** (Apple's modern test framework). Tests live in `GlackTests/`, organized by source area (`AuthTests/`, `ChatAPITests/`, `StoreTests/`) with deterministic fixtures in `GlackTests/Helpers/`. Schema and FTS5 trigger tests run against in-memory SQLite (zero global state); Keychain tests use a separate `glacktest-*` account namespace so they can never touch the real OAuth refresh token.
+
+Conventions cribbed from AskFlorence:
+- Deterministic test data (no randomness — tests are reproducible)
+- State isolation via in-memory DB + scoped Keychain accounts
+- Cleanup gates: tests refuse to delete anything outside their own namespace
+- No snapshot tests (too brittle for SwiftUI iteration)
+
 ## License
 
 MIT. See LICENSE.

@@ -50,8 +50,7 @@ private struct SignInView: View {
             .disabled(session.isSigningIn)
 
             if session.isSigningIn {
-                ProgressView()
-                    .controlSize(.small)
+                ProgressView().controlSize(.small)
             }
             if let err = session.lastError {
                 Text(err)
@@ -71,32 +70,91 @@ private struct SignedInView: View {
     let session: Session
     let email: String?
 
+    @State private var spacesObserver = SpacesObserver()
+    @State private var messagesObserver = MessagesObserver()
+    @State private var sync = Sync.shared
+    @State private var selectedSpaceID: String?
+
     var body: some View {
         NavigationSplitView {
-            List {
-                Section("Direct Messages") {
-                    Text("No DMs yet")
-                        .foregroundStyle(.secondary)
-                }
-                Section("Spaces") {
-                    Text("Loading spaces…")
-                        .foregroundStyle(.secondary)
-                }
-                Section {
-                    Button("Sign out", role: .destructive) {
-                        Task { await session.signOut() }
-                    }
-                }
+            VStack(spacing: 0) {
+                SidebarView(observer: spacesObserver, selection: $selectedSpaceID)
+                Divider()
+                footer
             }
+            .frame(minWidth: 240)
             .navigationTitle("Glack")
-            .frame(minWidth: 220)
         } detail: {
-            ContentUnavailableView(
-                "Signed in" + (email.map { " as \($0)" } ?? ""),
-                systemImage: "checkmark.circle",
-                description: Text("Spaces and message sync land in Phase 2.")
-            )
+            if let id = selectedSpaceID {
+                ConversationView(spaceID: id, observer: messagesObserver)
+                    .navigationTitle(detailTitle(for: id))
+            } else {
+                ContentUnavailableView(
+                    "Pick a conversation",
+                    systemImage: "sidebar.left",
+                    description: detailDescription
+                )
+            }
         }
+        .task {
+            spacesObserver.start()
+            sync.start()
+        }
+        .onDisappear {
+            sync.stop()
+            spacesObserver.stop()
+            messagesObserver.stop()
+        }
+    }
+
+    private var detailDescription: Text {
+        if sync.isRunning && spacesObserver.spaces.isEmpty {
+            return Text("Loading your spaces from Google Chat…")
+        }
+        return Text("Choose a DM or space from the sidebar.")
+    }
+
+    private func detailTitle(for spaceID: String) -> String {
+        spacesObserver.spaces.first(where: { $0.id == spaceID }).map(name(of:)) ?? ""
+    }
+
+    private func name(of space: SpaceRecord) -> String {
+        if let dn = space.displayName, !dn.isEmpty { return dn }
+        switch space.type {
+        case .directMessage: return "Direct Message"
+        case .groupChat:     return "Group Chat"
+        default:             return space.id
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(email ?? "Signed in").font(.system(size: 11)).lineLimit(1)
+                Text(syncStatus).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            Button {
+                Task { await session.signOut() }
+            } label: {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+            }
+            .buttonStyle(.plain)
+            .help("Sign out")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.regularMaterial)
+    }
+
+    private var syncStatus: String {
+        if let err = sync.lastError { return "Sync error — see logs" }
+        if let last = sync.lastSyncedAt {
+            let f = RelativeDateTimeFormatter()
+            f.unitsStyle = .short
+            return "Synced \(f.localizedString(for: last, relativeTo: Date()))"
+        }
+        return sync.isRunning ? "Syncing…" : "Idle"
     }
 }
 

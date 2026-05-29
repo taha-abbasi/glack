@@ -69,3 +69,21 @@ targets:
           }
           EOF
           echo "GlackBuildConfig: wrote ${OUT} (id=${#GOOGLE_OAUTH_CLIENT_ID} secret=${#GOOGLE_OAUTH_CLIENT_SECRET} chars)"
+
+  GlackTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: GlackTests
+    dependencies:
+      - target: Glack
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.github.taha-abbasi.glack.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        BUNDLE_LOADER: $(TEST_HOST)
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Glack.app/Contents/MacOS/Glack

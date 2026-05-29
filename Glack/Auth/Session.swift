@@ -34,18 +34,23 @@ final class Session {
 
     func bootstrap() async {
         guard case .unknown = state else { return }
+        Log.auth.info("Session.bootstrap()")
         do {
             guard let refresh = try KeychainStore.get(account: keychainAccount),
                   !refresh.isEmpty else {
+                Log.auth.info("no refresh token in Keychain → signedOut")
                 state = .signedOut
                 return
             }
+            Log.auth.info("found refresh token, exchanging for access token")
             let tokens = try await OAuthClient.shared.refresh(refreshToken: refresh)
+            Log.auth.info("refresh succeeded — signed in")
             try? KeychainStore.set(tokens.refreshToken, account: keychainAccount)
             currentTokens = tokens
             state = .signedIn(email: extractEmail(idToken: tokens.idToken))
         } catch {
             // Silent refresh failed — token may be revoked. Drop it and show sign-in.
+            Log.auth.error("silent refresh failed: \(error.localizedDescription, privacy: .public)")
             try? KeychainStore.delete(account: keychainAccount)
             lastError = "Couldn't restore session: \(error.localizedDescription)"
             state = .signedOut
