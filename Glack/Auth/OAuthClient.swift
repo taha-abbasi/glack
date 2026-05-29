@@ -87,6 +87,11 @@ final class OAuthClient: NSObject {
         // bypasses the People API privacy strip). Requires signed-in user to
         // be a Workspace admin.
         "https://www.googleapis.com/auth/admin.directory.user.readonly",
+        // Cloud Pub/Sub — realtime event delivery. Glack creates a topic +
+        // pull subscription in the user's GCP project, subscribes the Chat
+        // event bus to publish to it, and pulls events as they arrive. Drops
+        // perceived latency from 30s (poll) to ~2s.
+        "https://www.googleapis.com/auth/pubsub",
     ]
 
     private var clientID: String {

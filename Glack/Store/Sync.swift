@@ -29,6 +29,9 @@ final class Sync {
 
     private init() {}
 
+    /// Boot the polling + realtime pipelines. Realtime delivers events as
+    /// they happen (Workspace Events → Pub/Sub → pull loop); the 30-second
+    /// poll runs alongside as a safety net for missed events.
     func start() {
         guard pollTask == nil else { return }
         Log.sync.info("Sync.start()")
@@ -42,12 +45,18 @@ final class Sync {
                 await self?.refreshAll()
             }
         }
+        // Kick the realtime pipeline alongside the poll. RealtimeManager
+        // handles its own error backoff; if the user hasn't granted the
+        // pubsub scope yet, calls will 403 and the manager will retry
+        // after each token refresh.
+        RealtimeManager.shared.start()
     }
 
     func stop() {
         pollTask?.cancel()
         pollTask = nil
         isRunning = false
+        Task { await RealtimeManager.shared.stop() }
     }
 
     // MARK: - One-shot operations
@@ -86,6 +95,18 @@ final class Sync {
     func syncVisibleSpace(_ spaceID: String) async {
         await syncRecentMessages(spaceID: spaceID, pageSize: 50)
         await syncMembers(spaceID: spaceID)
+    }
+
+    /// Realtime entry points — used by EventProcessor to fold a small slice
+    /// of the existing sync pipeline into event handlers.
+
+    func refreshSpace(_ spaceID: String) async {
+        await syncRecentMessages(spaceID: spaceID, pageSize: 25)
+        await syncMembers(spaceID: spaceID)
+    }
+
+    func refreshSpaces() async {
+        await syncSpaces()
     }
 
     /// Delete a message authored by the signed-in user. Marks `deletedAt`
@@ -711,7 +732,7 @@ final class Sync {
         }
     }
 
-    nonisolated private static func plainText(from m: GMessage) -> String {
+    nonisolated static func plainText(from m: GMessage) -> String {
         let raw = m.text ?? m.argumentText ?? m.formattedText ?? ""
         // Phase 2 normalization: strip Google's mention syntax <users/X> → @ + sender name when present.
         // Phase 2b will do deeper normalization.
