@@ -120,6 +120,13 @@ private struct SignedInView: View {
                                 set: { if !$0 { selectedThreadID = nil } }
                             )
                         )
+                        // Force a fresh view identity per thread. Without
+                        // this, SwiftUI preserves the same ThreadView (and
+                        // its child ThreadComposerView) across thread
+                        // switches, and the composer's send() ended up
+                        // referencing whichever threadName was first set —
+                        // every subsequent reply leaked to that thread.
+                        .id(threadID)
                         .frame(width: 380)
                     }
                 }

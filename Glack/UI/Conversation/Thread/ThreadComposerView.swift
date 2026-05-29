@@ -111,6 +111,10 @@ struct ThreadComposerView: View {
         let snapshot = NSAttributedString(attributedString: attributedText)
         let markdown = AttributedChatMarkdown.serialize(snapshot)
         guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // Log what we're actually about to send. If the user is seeing
+        // replies land in the wrong thread, this log line will show whether
+        // the bug is in threadName propagation or in the API call.
+        Log.ui.info("ThreadComposer.send → space=\(spaceID, privacy: .public) thread=\(threadName, privacy: .public)")
         isSending = true
         sendError = nil
         attributedText = NSAttributedString()
