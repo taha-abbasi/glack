@@ -27,10 +27,15 @@ struct MessageRow: View {
         (threadReplyCount ?? 0) > 1
     }
 
-    /// True when the cursor is over either the row or the floating toolbar.
-    /// Combining both prevents the toolbar from disappearing in the gap when
-    /// the user moves up to click it.
-    private var hovering: Bool { rowHovering || toolbarHovering || pickerOpen }
+    /// True when the cursor is over either the row or the floating toolbar,
+    /// OR when a popover/dialog/alert anchored to the toolbar is open. The
+    /// toolbar (and any view attached to it, like the delete confirmation
+    /// dialog) must stay mounted while the user is interacting with one of
+    /// these — otherwise the dialog flashes and disappears the moment the
+    /// menu closes and the cursor leaves the row.
+    private var hovering: Bool {
+        rowHovering || toolbarHovering || pickerOpen || showDeleteConfirm || deleteError != nil
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
