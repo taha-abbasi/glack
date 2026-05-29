@@ -80,6 +80,34 @@ enum Schema {
             """)
         }
 
+        m.registerMigration("v2-space-classification-fields") { db in
+            try db.alter(table: "space") { t in
+                t.add(column: "spaceHistoryState", .text)
+                t.add(column: "spaceUri", .text)
+                t.add(column: "externalUserAllowed", .boolean)
+                t.add(column: "singleUserBotDm", .boolean)
+                t.add(column: "importMode", .boolean)
+                t.add(column: "adminInstalled", .boolean)
+                t.add(column: "predefinedPermissionSettings", .text)
+                t.add(column: "accessState", .text)
+                t.add(column: "membershipCountHumans", .integer)
+                t.add(column: "membershipCountGroups", .integer)
+            }
+        }
+
+        m.registerMigration("v3-user-directory-cache") { db in
+            try db.create(table: "user") { t in
+                t.column("id", .text).primaryKey()        // "users/{numeric-id}"
+                t.column("displayName", .text)
+                t.column("givenName", .text)
+                t.column("familyName", .text)
+                t.column("photoUrl", .text)
+                t.column("email", .text)
+                t.column("lastSyncedAt", .datetime).notNull()
+            }
+            try db.create(indexOn: "user", columns: ["email"])
+        }
+
         return m
     }
 }

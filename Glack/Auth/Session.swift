@@ -10,11 +10,12 @@ final class Session {
         case unknown          // before bootstrap()
         case signedOut
         case signingIn
-        case signedIn(email: String?)
+        case signedIn(email: String?, userID: String?)  // userID in "users/{sub}" form
     }
 
     private(set) var state: State = .unknown
     private(set) var lastError: String?
+    private(set) var currentUserID: String?  // "users/{numeric-id}" or nil
 
     private var currentTokens: TokenSet?
 
@@ -47,7 +48,9 @@ final class Session {
             Log.auth.info("refresh succeeded — signed in")
             try? KeychainStore.set(tokens.refreshToken, account: keychainAccount)
             currentTokens = tokens
-            state = .signedIn(email: extractEmail(idToken: tokens.idToken))
+            let claims = extractClaims(idToken: tokens.idToken)
+            currentUserID = claims.userID
+            state = .signedIn(email: claims.email, userID: claims.userID)
         } catch {
             // Silent refresh failed — token may be revoked. Drop it and show sign-in.
             Log.auth.error("silent refresh failed: \(error.localizedDescription, privacy: .public)")
@@ -70,7 +73,13 @@ final class Session {
             }
             try KeychainStore.set(tokens.refreshToken, account: keychainAccount)
             currentTokens = tokens
-            state = .signedIn(email: extractEmail(idToken: tokens.idToken))
+            let claims = extractClaims(idToken: tokens.idToken)
+            currentUserID = claims.userID
+            state = .signedIn(email: claims.email, userID: claims.userID)
+        } catch OAuthError.userCancelled {
+            Log.auth.info("user cancelled sign-in")
+            lastError = nil
+            state = .signedOut
         } catch {
             lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             state = .signedOut
@@ -80,6 +89,7 @@ final class Session {
     func signOut() async {
         try? KeychainStore.delete(account: keychainAccount)
         currentTokens = nil
+        currentUserID = nil
         lastError = nil
         state = .signedOut
     }
@@ -96,22 +106,28 @@ final class Session {
         try? KeychainStore.set(tokens.refreshToken, account: keychainAccount)
         currentTokens = tokens
         if case .signedIn = state {
-            state = .signedIn(email: extractEmail(idToken: tokens.idToken))
+            let claims = extractClaims(idToken: tokens.idToken)
+            currentUserID = claims.userID
+            state = .signedIn(email: claims.email, userID: claims.userID)
         }
         return tokens.accessToken
     }
 
     // MARK: - Helpers
 
-    private func extractEmail(idToken: String?) -> String? {
-        guard let parts = idToken?.split(separator: "."), parts.count >= 2 else { return nil }
+    private func extractClaims(idToken: String?) -> (email: String?, userID: String?) {
+        guard let parts = idToken?.split(separator: "."), parts.count >= 2 else { return (nil, nil) }
         var b64 = String(parts[1]).replacingOccurrences(of: "-", with: "+")
                                   .replacingOccurrences(of: "_", with: "/")
         while b64.count % 4 != 0 { b64.append("=") }
         guard let data = Data(base64Encoded: b64),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
+            return (nil, nil)
         }
-        return json["email"] as? String
+        let email = json["email"] as? String
+        // `sub` is the user's numeric Google ID; Chat API uses `users/{sub}` for
+        // the same person.
+        let userID = (json["sub"] as? String).map { "users/\($0)" }
+        return (email, userID)
     }
 }

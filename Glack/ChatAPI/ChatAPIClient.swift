@@ -52,6 +52,53 @@ actor ChatAPIClient {
         return try await getJSON(url)
     }
 
+    /// People API: list all directory profiles in the current Workspace org.
+    /// Paginates and returns every person.
+    func listAllDirectoryPeople() async throws -> [GPerson] {
+        var all: [GPerson] = []
+        var pageToken: String?
+        repeat {
+            let url = ChatEndpoint.listDirectoryPeople(pageToken: pageToken)
+            let response: GListDirectoryPeopleResponse = try await getJSON(url)
+            if let people = response.people { all.append(contentsOf: people) }
+            pageToken = response.nextPageToken
+        } while pageToken != nil && !pageToken!.isEmpty
+        return all
+    }
+
+    /// Admin SDK Directory API: list all users in the signed-in admin's
+    /// Workspace customer. Returns full data (name, email, photo) bypassing
+    /// People API's privacy stripping. Throws 403 if signed-in user isn't an
+    /// admin — caller should fall back to People API in that case.
+    func listAdminUsers() async throws -> [GAdminUser] {
+        var all: [GAdminUser] = []
+        var pageToken: String?
+        repeat {
+            let url = ChatEndpoint.adminListUsers(pageToken: pageToken)
+            let response: GAdminUsersListResponse = try await getJSON(url)
+            if let users = response.users { all.append(contentsOf: users) }
+            pageToken = response.nextPageToken
+        } while pageToken != nil && !pageToken!.isEmpty
+        return all
+    }
+
+    /// People API: resolve a specific list of user IDs (in `users/{id}` Chat
+    /// format) to People profiles in batches of 50. Falls back-friendly when
+    /// listDirectoryPeople returns empty.
+    func batchGetPeople(userIDs: [String]) async throws -> [GPerson] {
+        var collected: [GPerson] = []
+        // People API uses `people/{id}` resource names. Chat uses `users/{id}`.
+        let resourceNames = userIDs.map { $0.replacingOccurrences(of: "users/", with: "people/") }
+        for batch in resourceNames.chunks(ofCount: 50) {
+            let url = ChatEndpoint.peopleBatchGet(resourceNames: Array(batch))
+            let response: GBatchGetPeopleResponse = try await getJSON(url)
+            for r in response.responses ?? [] {
+                if let p = r.person { collected.append(p) }
+            }
+        }
+        return collected
+    }
+
     // MARK: - Internal HTTP
 
     private func getJSON<T: Decodable>(_ url: URL) async throws -> T {
@@ -73,5 +120,19 @@ actor ChatAPIClient {
         } catch {
             throw ChatAPIError.malformedResponse
         }
+    }
+}
+
+private extension Array {
+    func chunks(ofCount n: Int) -> [ArraySlice<Element>] {
+        guard n > 0 else { return [] }
+        var out: [ArraySlice<Element>] = []
+        var i = 0
+        while i < count {
+            let end = Swift.min(i + n, count)
+            out.append(self[i..<end])
+            i = end
+        }
+        return out
     }
 }

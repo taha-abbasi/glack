@@ -3,6 +3,7 @@ import SwiftUI
 struct ConversationView: View {
     let spaceID: String
     @Bindable var observer: MessagesObserver
+    @Bindable var users: UsersObserver
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,7 +18,7 @@ struct ConversationView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 8) {
                             ForEach(observer.messages) { msg in
-                                MessageRow(message: msg)
+                                MessageRow(message: msg, users: users)
                                     .id(msg.id)
                             }
                         }

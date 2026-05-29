@@ -10,6 +10,7 @@ enum OAuthError: LocalizedError {
     case stateMismatch
     case missingAuthorizationCode
     case tokenExchangeFailed(status: Int, body: String)
+    case userCancelled
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +26,8 @@ enum OAuthError: LocalizedError {
             return "Google's callback did not include an authorization code."
         case .tokenExchangeFailed(let status, let body):
             return "Token exchange failed (HTTP \(status)): \(body)"
+        case .userCancelled:
+            return nil  // Caller should suppress UI display.
         }
     }
 }
@@ -70,6 +73,12 @@ final class OAuthClient: NSObject {
         "https://www.googleapis.com/auth/chat.memberships",
         "https://www.googleapis.com/auth/chat.users.readstate",
         "https://www.googleapis.com/auth/chat.spaces.pins",
+        // People API — directory lookup for user names + photos (Phase 2 polish).
+        "https://www.googleapis.com/auth/directory.readonly",
+        // Admin SDK Directory API — full org user data when signed-in user is
+        // a Workspace admin. Provides names + photos + emails that People API
+        // strips for non-admin org members.
+        "https://www.googleapis.com/auth/admin.directory.user.readonly",
     ]
 
     private var clientID: String {
@@ -184,7 +193,15 @@ final class OAuthClient: NSObject {
     ) -> @Sendable (URL?, Error?) -> Void {
         { url, error in
             if let error {
-                cont.resume(throwing: error)
+                // Recognize user dismissal of the auth sheet and surface it as
+                // a clean .userCancelled so the UI doesn't pop an ugly NSError.
+                let ns = error as NSError
+                if ns.domain == "com.apple.AuthenticationServices.WebAuthenticationSession",
+                   ns.code == 1 {
+                    cont.resume(throwing: OAuthError.userCancelled)
+                } else {
+                    cont.resume(throwing: error)
+                }
                 return
             }
             guard let url else {

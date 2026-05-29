@@ -51,6 +51,8 @@ final class Sync {
             await syncRecentMessages(spaceID: id, pageSize: 50)
             await syncMembers(spaceID: id)
         }
+        // Directory sync LAST — by now we have member/sender IDs to batchGet on.
+        await syncDirectoryPeople()
         lastSyncedAt = Date()
     }
 
@@ -62,6 +64,7 @@ final class Sync {
         for id in spaceIDs {
             await syncRecentMessages(spaceID: id, pageSize: 25)
         }
+        await syncDirectoryPeople()
         lastSyncedAt = Date()
     }
 
@@ -90,7 +93,17 @@ final class Sync {
                         lastReadAt: nil,
                         backfillOldestSeenId: nil,
                         backfillCompleteAt: nil,
-                        addedAt: now
+                        addedAt: now,
+                        spaceHistoryState: s.spaceHistoryState,
+                        spaceUri: s.spaceUri,
+                        externalUserAllowed: s.externalUserAllowed,
+                        singleUserBotDm: s.singleUserBotDm,
+                        importMode: s.importMode,
+                        adminInstalled: s.adminInstalled,
+                        predefinedPermissionSettings: s.predefinedPermissionSettings,
+                        accessState: s.accessSettings?.accessState,
+                        membershipCountHumans: s.membershipCount?.joinedDirectHumanUserCount,
+                        membershipCountGroups: s.membershipCount?.joinedGroupCount
                     )
                     // Upsert: keep our locally-tracked unreadCount/lastReadAt/backfill state.
                     if let existing = try SpaceRecord.fetchOne(db, key: s.name) {
@@ -145,6 +158,100 @@ final class Sync {
             }
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+
+    private func syncDirectoryPeople() async {
+        // 0) PREFERRED: Admin SDK Directory API — returns ALL fields if signed-in
+        //    user is a Workspace admin. People API strips names/emails for
+        //    non-self users regardless of project location, so this is the
+        //    only universal-data path for admin users.
+        if await syncViaAdminDirectory() {
+            return
+        }
+
+        do {
+            Log.sync.info("syncDirectoryPeople()")
+            // 1) Try the bulk directory listing first.
+            let bulk = try await ChatAPIClient.shared.listAllDirectoryPeople()
+            Log.sync.info("listDirectoryPeople returned \(bulk.count) people")
+
+            // 2) If empty (admin policy blocks bulk org listing), fall back
+            //    to batchGet for every userID we've seen in messages/members.
+            let people: [GPerson]
+            if bulk.isEmpty {
+                let knownIDs = (try? await Database.shared.read { db in
+                    try String.fetchAll(db, sql: """
+                        SELECT DISTINCT senderId FROM message WHERE senderId IS NOT NULL
+                        UNION
+                        SELECT DISTINCT userId FROM member
+                    """)
+                }) ?? []
+                Log.sync.info("listDirectoryPeople empty; batchGet for \(knownIDs.count) known IDs")
+                people = knownIDs.isEmpty ? [] : (try await ChatAPIClient.shared.batchGetPeople(userIDs: knownIDs))
+                Log.sync.info("batchGetPeople returned \(people.count) people")
+            } else {
+                people = bulk
+            }
+
+            try await Database.shared.write { db in
+                let now = Date()
+                for p in people {
+                    let id = p.resourceName.replacingOccurrences(of: "people/", with: "users/")
+                    let primaryName = p.names?.first
+                    // Only keep real user-uploaded photos. Google serves a generic
+                    // gray silhouette (~564 bytes, isDefault=true) for users with
+                    // no photo set OR users whose photos aren't shared with
+                    // external apps — we'd rather show initials than a fake face.
+                    let primaryPhoto = p.photos?.first { $0.isDefault != true }
+                    let primaryEmail = (p.emailAddresses?.first { $0.metadata?.primary == true } ?? p.emailAddresses?.first)?.value
+                    var record = UserRecord(
+                        id: id,
+                        displayName: primaryName?.displayName,
+                        givenName: primaryName?.givenName,
+                        familyName: primaryName?.familyName,
+                        photoUrl: primaryPhoto?.url,
+                        email: primaryEmail,
+                        lastSyncedAt: now
+                    )
+                    try record.save(db)
+                }
+            }
+        } catch {
+            Log.sync.error("syncDirectoryPeople failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Try the Admin SDK Directory API path. Returns true if we successfully
+    /// populated the user table (signed-in user is a Workspace admin), false
+    /// if we should fall back to People API (e.g. 403 — not an admin, or
+    /// scope not yet granted via a fresh sign-in).
+    private func syncViaAdminDirectory() async -> Bool {
+        do {
+            Log.sync.info("syncViaAdminDirectory() — trying admin path")
+            let users = try await ChatAPIClient.shared.listAdminUsers()
+            Log.sync.info("Admin Directory returned \(users.count) users")
+            guard !users.isEmpty else { return false }
+            try await Database.shared.write { db in
+                let now = Date()
+                for u in users where u.suspended != true {
+                    let chatID = "users/\(u.id)"
+                    var record = UserRecord(
+                        id: chatID,
+                        displayName: u.name?.fullName,
+                        givenName: u.name?.givenName,
+                        familyName: u.name?.familyName,
+                        photoUrl: u.thumbnailPhotoUrl,
+                        email: u.primaryEmail,
+                        lastSyncedAt: now
+                    )
+                    try record.save(db)
+                }
+            }
+            return true
+        } catch {
+            Log.sync.info("Admin Directory not usable: \(error.localizedDescription, privacy: .public) — falling back to People API")
+            return false
         }
     }
 

@@ -22,6 +22,18 @@ struct SpaceRecord: Codable, FetchableRecord, MutablePersistableRecord, Identifi
     var backfillCompleteAt: Date?
     var addedAt: Date
 
+    // v2 — Daily-Standup-style classification signals.
+    var spaceHistoryState: String?
+    var spaceUri: String?
+    var externalUserAllowed: Bool?
+    var singleUserBotDm: Bool?
+    var importMode: Bool?
+    var adminInstalled: Bool?
+    var predefinedPermissionSettings: String?
+    var accessState: String?
+    var membershipCountHumans: Int?
+    var membershipCountGroups: Int?
+
     var type: SpaceType { SpaceType(rawValue: spaceType) ?? .unknown }
 
     enum Columns {
@@ -58,6 +70,33 @@ struct MessageRecord: Codable, FetchableRecord, MutablePersistableRecord, Identi
         static let updatedAt = Column(CodingKeys.updatedAt)
         static let threadId = Column(CodingKeys.threadId)
         static let deletedAt = Column(CodingKeys.deletedAt)
+    }
+}
+
+struct UserRecord: Codable, FetchableRecord, MutablePersistableRecord, Identifiable, Hashable {
+    static let databaseTableName = "user"
+
+    var id: String                  // "users/{numeric-id}"
+    var displayName: String?
+    var givenName: String?
+    var familyName: String?
+    var photoUrl: String?
+    var email: String?
+    var lastSyncedAt: Date
+
+    var bestDisplayName: String {
+        if let dn = displayName, !dn.isEmpty { return dn }
+        if let gn = givenName, !gn.isEmpty {
+            if let fn = familyName, !fn.isEmpty { return "\(gn) \(fn)" }
+            return gn
+        }
+        return email ?? id
+    }
+
+    enum Columns {
+        static let id = Column(CodingKeys.id)
+        static let displayName = Column(CodingKeys.displayName)
+        static let email = Column(CodingKeys.email)
     }
 }
 

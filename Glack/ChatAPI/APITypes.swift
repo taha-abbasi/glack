@@ -9,8 +9,27 @@ struct GSpace: Decodable {
     let displayName: String?
     let spaceType: String?            // "SPACE" | "GROUP_CHAT" | "DIRECT_MESSAGE"
     let spaceThreadingState: String?  // "THREADED_MESSAGES" | "GROUPED_MESSAGES"
+    let spaceHistoryState: String?    // "HISTORY_ON" | "HISTORY_OFF"
+    let spaceUri: String?
     let createTime: String?
     let lastActiveTime: String?
+    let externalUserAllowed: Bool?
+    let singleUserBotDm: Bool?
+    let importMode: Bool?
+    let adminInstalled: Bool?
+    let predefinedPermissionSettings: String?
+    let accessSettings: GAccessSettings?
+    let membershipCount: GMembershipCount?
+}
+
+struct GAccessSettings: Decodable {
+    let accessState: String?
+    let audience: String?
+}
+
+struct GMembershipCount: Decodable {
+    let joinedDirectHumanUserCount: Int?
+    let joinedGroupCount: Int?
 }
 
 struct GListSpacesResponse: Decodable {
@@ -66,6 +85,77 @@ struct GListMembersResponse: Decodable {
 struct GSpaceReadState: Decodable {
     let name: String?
     let lastReadTime: String?
+}
+
+// MARK: - People API DTOs
+
+struct GPersonName: Decodable {
+    let displayName: String?
+    let givenName: String?
+    let familyName: String?
+}
+
+struct GPersonPhoto: Decodable {
+    let url: String?
+    let isDefault: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case url
+        case isDefault = "default"   // Google's JSON uses "default" (Swift reserved word)
+    }
+}
+
+struct GPersonEmail: Decodable {
+    let value: String?
+    let metadata: GPersonFieldMetadata?
+}
+
+struct GPersonFieldMetadata: Decodable {
+    let primary: Bool?
+}
+
+struct GPerson: Decodable {
+    let resourceName: String        // "people/{numeric-id}"
+    let names: [GPersonName]?
+    let photos: [GPersonPhoto]?
+    let emailAddresses: [GPersonEmail]?
+}
+
+struct GListDirectoryPeopleResponse: Decodable {
+    let people: [GPerson]?
+    let nextPageToken: String?
+    let nextSyncToken: String?
+}
+
+struct GPersonResponse: Decodable {
+    let httpStatusCode: Int?
+    let person: GPerson?
+    let requestedResourceName: String?
+}
+
+struct GBatchGetPeopleResponse: Decodable {
+    let responses: [GPersonResponse]?
+}
+
+// MARK: - Admin SDK Directory API DTOs
+
+struct GAdminUserName: Decodable {
+    let givenName: String?
+    let familyName: String?
+    let fullName: String?
+}
+
+struct GAdminUser: Decodable {
+    let id: String            // numeric ID, matches what People API uses
+    let primaryEmail: String?
+    let name: GAdminUserName?
+    let thumbnailPhotoUrl: String?
+    let suspended: Bool?
+}
+
+struct GAdminUsersListResponse: Decodable {
+    let users: [GAdminUser]?
+    let nextPageToken: String?
 }
 
 // MARK: - Date parsing

@@ -10,7 +10,7 @@ struct RootView: View {
                 BootstrapView()
             case .signedOut, .signingIn:
                 SignInView(session: session)
-            case .signedIn(let email):
+            case .signedIn(let email, _):
                 SignedInView(session: session, email: email)
             }
         }
@@ -72,13 +72,21 @@ private struct SignedInView: View {
 
     @State private var spacesObserver = SpacesObserver()
     @State private var messagesObserver = MessagesObserver()
+    @State private var usersObserver = UsersObserver()
+    @State private var membersObserver = MembersObserver()
     @State private var sync = Sync.shared
     @State private var selectedSpaceID: String?
 
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
-                SidebarView(observer: spacesObserver, selection: $selectedSpaceID)
+                SidebarView(
+                    observer: spacesObserver,
+                    users: usersObserver,
+                    members: membersObserver,
+                    currentUserID: session.currentUserID,
+                    selection: $selectedSpaceID
+                )
                 Divider()
                 footer
             }
@@ -86,7 +94,7 @@ private struct SignedInView: View {
             .navigationTitle("Glack")
         } detail: {
             if let id = selectedSpaceID {
-                ConversationView(spaceID: id, observer: messagesObserver)
+                ConversationView(spaceID: id, observer: messagesObserver, users: usersObserver)
                     .navigationTitle(detailTitle(for: id))
             } else {
                 ContentUnavailableView(
@@ -98,11 +106,15 @@ private struct SignedInView: View {
         }
         .task {
             spacesObserver.start()
+            usersObserver.start()
+            membersObserver.start()
             sync.start()
         }
         .onDisappear {
             sync.stop()
             spacesObserver.stop()
+            usersObserver.stop()
+            membersObserver.stop()
             messagesObserver.stop()
         }
     }

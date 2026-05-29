@@ -34,6 +34,78 @@ final class SpacesObserver {
     }
 }
 
+/// Live cache of the directory-people user table, keyed by user ID.
+/// Updated whenever syncDirectoryPeople writes new rows.
+@MainActor
+@Observable
+final class UsersObserver {
+    private(set) var users: [String: UserRecord] = [:]
+    private var task: Task<Void, Never>?
+
+    func start() {
+        task?.cancel()
+        let observation = ValueObservation.tracking { db in
+            try UserRecord.fetchAll(db)
+        }
+        task = Task { [weak self] in
+            do {
+                for try await rows in observation.values(in: Database.shared) {
+                    var map: [String: UserRecord] = [:]
+                    for u in rows { map[u.id] = u }
+                    self?.users = map
+                }
+            } catch {}
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+    }
+
+    func displayName(for userID: String?) -> String? {
+        guard let id = userID, let u = users[id], let dn = u.displayName, !dn.isEmpty else { return nil }
+        return dn
+    }
+
+    func photoURL(for userID: String?) -> URL? {
+        guard let id = userID, let s = users[id]?.photoUrl else { return nil }
+        return URL(string: s)
+    }
+}
+
+/// Live membership cache — [spaceID: [userIDs]] — used to derive DM display
+/// names from "the other person(s) in the room".
+@MainActor
+@Observable
+final class MembersObserver {
+    private(set) var membersBySpace: [String: [String]] = [:]
+    private var task: Task<Void, Never>?
+
+    func start() {
+        task?.cancel()
+        let observation = ValueObservation.tracking { db in
+            try MemberRecord.fetchAll(db)
+        }
+        task = Task { [weak self] in
+            do {
+                for try await rows in observation.values(in: Database.shared) {
+                    var grouped: [String: [String]] = [:]
+                    for r in rows {
+                        grouped[r.spaceId, default: []].append(r.userId)
+                    }
+                    self?.membersBySpace = grouped
+                }
+            } catch {}
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+    }
+}
+
 /// Live messages for a single space, sorted by createTime asc, deleted excluded.
 @MainActor
 @Observable

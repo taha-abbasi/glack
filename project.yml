@@ -38,6 +38,7 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.social-networking
         INFOPLIST_KEY_NSHumanReadableCopyright: "MIT © 2026 Taha Abbasi"
         INFOPLIST_KEY_NSMainStoryboardFile: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: NO
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"

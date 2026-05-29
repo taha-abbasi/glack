@@ -2,9 +2,19 @@ import SwiftUI
 
 struct SidebarView: View {
     @Bindable var observer: SpacesObserver
+    @Bindable var users: UsersObserver
+    @Bindable var members: MembersObserver
+    let currentUserID: String?
     @Binding var selection: String?
 
     var body: some View {
+        VStack(spacing: 0) {
+            DirectoryAccessNudge(users: users, members: members, currentUserID: currentUserID)
+            listBody
+        }
+    }
+
+    private var listBody: some View {
         List(selection: $selection) {
             let groups = grouped(observer.spaces)
 
@@ -13,7 +23,8 @@ struct SidebarView: View {
                     Text("No DMs").foregroundStyle(.secondary).font(.footnote)
                 } else {
                     ForEach(groups.dms) { space in
-                        SidebarRow(space: space).tag(space.id as String?)
+                        SidebarRow(space: space, users: users, members: members, currentUserID: currentUserID)
+                            .tag(space.id as String?)
                     }
                 }
             }
@@ -23,7 +34,8 @@ struct SidebarView: View {
                     Text("No spaces").foregroundStyle(.secondary).font(.footnote)
                 } else {
                     ForEach(groups.spaces) { space in
-                        SidebarRow(space: space).tag(space.id as String?)
+                        SidebarRow(space: space, users: users, members: members, currentUserID: currentUserID)
+                            .tag(space.id as String?)
                     }
                 }
             }
@@ -36,13 +48,26 @@ struct SidebarView: View {
         var spaces: [SpaceRecord]
     }
 
+    /// Slack-style grouping that matches Google Chat's own web UI.
+    ///
+    /// Google's web app puts unthreaded "Conversations" in the DM section
+    /// even when they have a name and `spaceType: SPACE` (e.g. Meet-created
+    /// conversations like "Daily Standup - May 21"). The single signal that
+    /// distinguishes a real Space from a Conversation in user-auth API
+    /// responses is `threaded` — threaded=true is a room/channel; threaded=false
+    /// is a conversation. Member counts don't work as a heuristic in small
+    /// teams (every space has 3 members in a 3-person org).
     private func grouped(_ all: [SpaceRecord]) -> Grouped {
         var dms: [SpaceRecord] = []
         var spaces: [SpaceRecord] = []
         for s in all {
             switch s.type {
-            case .directMessage, .groupChat: dms.append(s)
-            case .space, .unknown:           spaces.append(s)
+            case .directMessage, .groupChat:
+                dms.append(s)
+            case .space:
+                if s.threaded { spaces.append(s) } else { dms.append(s) }
+            case .unknown:
+                spaces.append(s)
             }
         }
         return Grouped(dms: dms, spaces: spaces)
