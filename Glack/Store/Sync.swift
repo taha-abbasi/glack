@@ -54,6 +54,7 @@ final class Sync {
 
     func fullSnapshot() async {
         await syncSpaces()
+        await syncSections()
         // Pull a recent page for each space so the UI has something immediately.
         // Phase 2b will deepen this into full backfill with rate limiting.
         let spaceIDs = (try? await Database.shared.read { db in
@@ -71,6 +72,7 @@ final class Sync {
 
     func refreshAll() async {
         await syncSpaces()
+        await syncSections()
         let spaceIDs = (try? await Database.shared.read { db in
             try String.fetchAll(db, sql: "SELECT id FROM space")
         }) ?? []
@@ -84,6 +86,88 @@ final class Sync {
     func syncVisibleSpace(_ spaceID: String) async {
         await syncRecentMessages(spaceID: spaceID, pageSize: 50)
         await syncMembers(spaceID: spaceID)
+    }
+
+    /// Add a Unicode emoji reaction to a message and refresh the visible
+    /// space so the summary chip strip updates without waiting on the
+    /// 30-second poll.
+    func addReaction(messageName: String, unicode: String) async {
+        do {
+            _ = try await ChatAPIClient.shared.addUnicodeReaction(messageName: messageName, unicode: unicode)
+            // The space-id is the messageName's first two segments.
+            let spaceID = messageName.split(separator: "/").prefix(2).joined(separator: "/")
+            await syncRecentMessages(spaceID: spaceID, pageSize: 25)
+        } catch {
+            Log.sync.error("addReaction(\(unicode, privacy: .public)) failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    nonisolated static func encodeReactions(_ summaries: [GEmojiReactionSummary]?) -> String? {
+        guard let s = summaries, !s.isEmpty,
+              let data = try? JSONEncoder().encode(s),
+              let str = String(data: data, encoding: .utf8) else { return nil }
+        return str
+    }
+
+    /// Send a plain-text message with optimistic local insert. Writes a
+    /// `pending-{uuid}` row immediately so the UI updates without waiting
+    /// on the network; on success swaps it for the server's canonical row;
+    /// on failure removes the temp row and rethrows so the caller can
+    /// restore the composer text.
+    func sendMessage(spaceID: String, text: String) async throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let tempID = "pending-\(UUID().uuidString)"
+        let now = Date()
+        let me = Session.shared.currentUserID
+        let optimistic = MessageRecord(
+            id: tempID,
+            spaceId: spaceID,
+            senderId: me,
+            senderName: nil,
+            text: text,
+            textPlain: text,
+            createdAt: now,
+            updatedAt: nil,
+            threadId: nil,
+            deletedAt: nil,
+            attachmentCount: 0,
+            rawJson: nil,
+            reactionsJson: nil
+        )
+        try await Database.shared.write { db in
+            var r = optimistic
+            try r.insert(db)
+        }
+        do {
+            let server = try await ChatAPIClient.shared.sendMessage(spaceID: spaceID, text: text)
+            try await Database.shared.write { db in
+                try MessageRecord.deleteOne(db, key: tempID)
+                var record = MessageRecord(
+                    id: server.name,
+                    spaceId: spaceID,
+                    senderId: server.sender?.name,
+                    senderName: server.sender?.displayName,
+                    text: server.text ?? server.argumentText ?? server.formattedText,
+                    textPlain: Self.plainText(from: server),
+                    createdAt: APIDate.parse(server.createTime) ?? now,
+                    updatedAt: APIDate.parse(server.lastUpdateTime),
+                    threadId: server.thread?.name,
+                    deletedAt: APIDate.parse(server.deleteTime),
+                    attachmentCount: server.attachment?.count ?? 0,
+                    rawJson: nil,
+                    reactionsJson: Self.encodeReactions(server.emojiReactionSummaries)
+                )
+                try record.save(db)
+            }
+            Log.sync.info("sendMessage to \(spaceID, privacy: .public) succeeded")
+        } catch {
+            try? await Database.shared.write { db in
+                try MessageRecord.deleteOne(db, key: tempID)
+            }
+            Log.sync.error("sendMessage to \(spaceID, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
     }
 
     // MARK: - Per-resource syncs
@@ -142,8 +226,30 @@ final class Sync {
                 spaceID: spaceID, pageToken: nil, pageSize: pageSize, orderBy: "createTime desc"
             )
             let messages = resp.messages ?? []
-            try await Database.shared.write { db in
+            let me = Session.shared.currentUserID
+            let viewing = Session.shared.currentlyViewingSpaceID
+            // Collect newly-arrived, notify-worthy messages — bound by
+            // `lastSyncedAt` so the first-ever sync after sign-in doesn't
+            // dump a notification per backfilled message.
+            let cutoff = lastSyncedAt
+            struct NewMessage { let id: String; let senderName: String?; let senderID: String?; let text: String }
+            let newOnes: [NewMessage] = try await Database.shared.write { db -> [NewMessage] in
+                var collected: [NewMessage] = []
+                // Snapshot existing IDs so we can detect inserts vs upserts
+                // without doing N queries.
+                let existingIDs: Set<String> = try Set(
+                    String.fetchAll(db,
+                                    sql: "SELECT id FROM message WHERE spaceId = ?",
+                                    arguments: [spaceID])
+                )
+                var insertedCount = 0
+                var insertedFromOthers = 0
                 for m in messages {
+                    if APIDate.parse(m.deleteTime) != nil {
+                        try MessageRecord.deleteOne(db, key: m.name)
+                        continue
+                    }
+                    let isNew = !existingIDs.contains(m.name)
                     var record = MessageRecord(
                         id: m.name,
                         spaceId: spaceID,
@@ -154,23 +260,152 @@ final class Sync {
                         createdAt: APIDate.parse(m.createTime) ?? Date(),
                         updatedAt: APIDate.parse(m.lastUpdateTime),
                         threadId: m.thread?.name,
-                        deletedAt: APIDate.parse(m.deleteTime),
+                        deletedAt: nil,
                         attachmentCount: m.attachment?.count ?? 0,
-                        rawJson: nil
+                        rawJson: nil,
+                        reactionsJson: Self.encodeReactions(m.emojiReactionSummaries)
                     )
                     try record.save(db)
+                    if isNew {
+                        insertedCount += 1
+                        let fromMe = (m.sender?.name == me)
+                        let isViewing = (spaceID == viewing)
+                        let createdAt = APIDate.parse(m.createTime) ?? Date()
+                        // Notify when: new row, not from me, not the open space,
+                        // and arrived after lastSyncedAt (so initial backfill
+                        // doesn't carpet-bomb the user).
+                        if !fromMe, !isViewing, cutoff == nil || createdAt > (cutoff ?? .distantPast) {
+                            insertedFromOthers += 1
+                            collected.append(NewMessage(
+                                id: m.name,
+                                senderName: m.sender?.displayName,
+                                senderID: m.sender?.name,
+                                text: record.textPlain ?? record.text ?? ""
+                            ))
+                        }
+                    }
                 }
-                // Bump space.lastActivityAt from messages we just saw (in case
-                // the spaces endpoint lags).
+                if insertedFromOthers > 0 {
+                    try db.execute(
+                        sql: "UPDATE space SET unreadCount = unreadCount + ? WHERE id = ?",
+                        arguments: [insertedFromOthers, spaceID]
+                    )
+                }
                 if let newest = messages.compactMap({ APIDate.parse($0.createTime) }).max() {
                     try db.execute(
                         sql: "UPDATE space SET lastActivityAt = MAX(COALESCE(lastActivityAt, 0), ?) WHERE id = ?",
                         arguments: [newest, spaceID]
                     )
                 }
+                return collected
+            }
+            // Fire notifications outside the DB write transaction.
+            if !newOnes.isEmpty {
+                await postNotifications(for: newOnes.map { ($0.id, $0.senderName, $0.senderID, $0.text) },
+                                        spaceID: spaceID)
             }
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+
+    /// Post UN notifications for newly-arrived messages. Looks up the space
+    /// display name + a richer sender name from local DB before firing.
+    private func postNotifications(for messages: [(id: String, senderName: String?, senderID: String?, text: String)],
+                                   spaceID: String) async {
+        // Resolve space title + sender names from local DB for prettier copy.
+        let spaceTitle: String? = try? await Database.shared.read { db in
+            try String.fetchOne(db,
+                                sql: "SELECT displayName FROM space WHERE id = ? LIMIT 1",
+                                arguments: [spaceID])
+        }
+        for msg in messages {
+            let resolvedSender: String? = try? await Database.shared.read { db -> String? in
+                guard let sid = msg.senderID else { return msg.senderName }
+                return try String.fetchOne(db,
+                                           sql: "SELECT displayName FROM user WHERE id = ? LIMIT 1",
+                                           arguments: [sid]) ?? msg.senderName
+            }
+            let title = resolvedSender ?? msg.senderName ?? "New message"
+            let subtitle = spaceTitle?.isEmpty == false ? spaceTitle : nil
+            let body = String(msg.text.prefix(280))
+            await NotificationManager.shared.postMessage(
+                messageID: msg.id,
+                title: title,
+                subtitle: subtitle,
+                body: body
+            )
+        }
+    }
+
+    /// Clear unread state on a space. Called from the UI when the user opens
+    /// the conversation.
+    func markRead(spaceID: String) async {
+        try? await Database.shared.write { db in
+            try db.execute(
+                sql: "UPDATE space SET unreadCount = 0, lastReadAt = ? WHERE id = ?",
+                arguments: [Date(), spaceID]
+            )
+        }
+    }
+
+    /// Pull the user's sidebar section structure: system sections
+    /// (DEFAULT_DIRECT_MESSAGES / DEFAULT_SPACES / DEFAULT_APPS) plus any
+    /// custom sections they've created. Spaces get assigned to sections via
+    /// the section_item table — same multi-section UI Chat web app renders.
+    private func syncSections() async {
+        do {
+            Log.sync.info("syncSections() — fetching sections + items")
+            let sections = try await ChatAPIClient.shared.listAllSections(userResource: "users/me")
+            Log.sync.info("got \(sections.count) sections")
+
+            // The wildcard `sections/-/items` endpoint returns HTTP 500
+            // (Google API bug, confirmed 2026-05). Fetch items per section
+            // in parallel instead.
+            let itemsBySection: [(String, [GSectionItem])] = try await withThrowingTaskGroup(of: (String, [GSectionItem]).self) { group in
+                for s in sections {
+                    group.addTask {
+                        let items = try await ChatAPIClient.shared.listSectionItems(sectionName: s.name)
+                        return (s.name, items)
+                    }
+                }
+                var out: [(String, [GSectionItem])] = []
+                for try await result in group { out.append(result) }
+                return out
+            }
+            let totalItems = itemsBySection.reduce(0) { $0 + $1.1.count }
+            Log.sync.info("got \(totalItems) section items across \(sections.count) sections")
+
+            try await Database.shared.write { db in
+                // Replace strategy: wipe + rewrite. Sections + items are small
+                // and may have been reordered server-side.
+                try db.execute(sql: "DELETE FROM section_item")
+                try db.execute(sql: "DELETE FROM section")
+                for s in sections {
+                    let isSystem = (s.type ?? "") != "CUSTOM_SECTION"
+                    var record = SectionRecord(
+                        id: s.name,
+                        displayName: s.displayName,
+                        sectionType: isSystem ? "SYSTEM" : "CUSTOM",
+                        systemSectionType: isSystem ? s.type : nil,
+                        sortOrder: s.sortOrder ?? 0
+                    )
+                    try record.insert(db)
+                }
+                for (sectionName, items) in itemsBySection {
+                    for (idx, item) in items.enumerated() {
+                        guard let space = item.space else { continue }
+                        var record = SectionItemRecord(
+                            sectionId: sectionName,
+                            spaceId: space,
+                            sortOrder: idx
+                        )
+                        try record.insert(db)
+                    }
+                }
+            }
+        } catch {
+            Log.sync.error("syncSections failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -295,7 +530,7 @@ final class Sync {
 
         var resolved = 0
         for userID in userIDs {
-            guard let record = recordsByID[userID] else { continue }
+            guard recordsByID[userID] != nil else { continue }
             // Admin SDK userKey: numeric id (strip our `users/` prefix) OR email.
             let userKey = userID.replacingOccurrences(of: "users/", with: "")
             do {

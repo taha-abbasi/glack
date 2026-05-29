@@ -17,6 +17,11 @@ final class Session {
     private(set) var lastError: String?
     private(set) var currentUserID: String?  // "users/{numeric-id}" or nil
 
+    /// The space the user is actively viewing — set by ConversationView's
+    /// `.task`. Sync uses this to suppress new-message notifications for
+    /// the conversation already on-screen.
+    var currentlyViewingSpaceID: String?
+
     private var currentTokens: TokenSet?
 
     private let keychainAccount = "oauth-refresh"

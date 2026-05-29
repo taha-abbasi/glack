@@ -64,6 +64,36 @@ struct GMessage: Decodable {
     let formattedText: String?
     let thread: GThread?
     let attachment: [GAttachment]?
+    let emojiReactionSummaries: [GEmojiReactionSummary]?
+}
+
+struct GEmoji: Codable, Hashable {
+    let unicode: String?
+    let customEmoji: GCustomEmojiRef?
+}
+
+struct GCustomEmojiRef: Codable, Hashable {
+    let name: String?              // "customEmojis/{uid}"
+    let uid: String?
+    let emojiName: String?         // ":internal-shrug:"
+    let temporaryImageUri: String?
+}
+
+struct GEmojiReactionSummary: Codable, Hashable {
+    let emoji: GEmoji
+    let reactionCount: Int?
+}
+
+struct GReaction: Decodable {
+    let name: String?              // "spaces/X/messages/Y/reactions/Z"
+    let emoji: GEmoji?
+}
+
+struct GReactionCreateBody: Encodable {
+    struct EmojiBody: Encodable {
+        let unicode: String?
+    }
+    let emoji: EmojiBody
 }
 
 struct GListMessagesResponse: Decodable {
@@ -85,6 +115,33 @@ struct GListMembersResponse: Decodable {
 struct GSpaceReadState: Decodable {
     let name: String?
     let lastReadTime: String?
+}
+
+// MARK: - Sections
+
+struct GSection: Decodable {
+    let name: String                   // "users/{id}/sections/{sid}"
+    let displayName: String?           // user-chosen name for custom; null for system
+    // Single `type` field per Chat API: CUSTOM_SECTION | DEFAULT_DIRECT_MESSAGES |
+    // DEFAULT_SPACES | DEFAULT_APPS. (Not the split sectionType/systemSectionType.)
+    let type: String?
+    let sortOrder: Int?
+}
+
+struct GListSectionsResponse: Decodable {
+    let sections: [GSection]?
+    let nextPageToken: String?
+}
+
+struct GSectionItem: Decodable {
+    let name: String?                  // "users/me/sections/{id}/items/{item}"
+    let space: String?                 // "spaces/X" — the space this item references
+    let sectionName: String?           // "users/me/sections/{id}" — back-reference
+}
+
+struct GListSectionItemsResponse: Decodable {
+    let sectionItems: [GSectionItem]?
+    let nextPageToken: String?
 }
 
 // MARK: - People API DTOs

@@ -15,12 +15,29 @@ enum ChatEndpoint {
         return comps.url!
     }
 
+    /// POST a reaction to a message. `messageName` is the full resource name
+    /// `spaces/X/messages/Y`.
+    static func createReaction(messageName: String) -> URL {
+        base.appendingPathComponent("\(messageName)/reactions")
+    }
+
+    /// POST a new message to a space. `messageReplyOption` controls thread
+    /// behavior — left as the default (NEW thread per message) so the same
+    /// endpoint works for both threaded spaces and DMs; pass `threadKey` /
+    /// `thread.name` later for explicit thread replies (Phase 4b).
+    static func createMessage(spaceID: String) -> URL {
+        base.appendingPathComponent("\(spaceID)/messages")
+    }
+
     static func listMessages(spaceID: String, pageToken: String? = nil, pageSize: Int = 100, orderBy: String = "createTime desc") -> URL {
-        // spaceID is "spaces/AAAAAAAAAA"
+        // spaceID is "spaces/AAAAAAAAAA". showDeleted=true so we receive
+        // tombstones for deletes that happened server-side and can drop
+        // the corresponding local rows.
         var comps = URLComponents(url: base.appendingPathComponent("\(spaceID)/messages"), resolvingAgainstBaseURL: false)!
         var items: [URLQueryItem] = [
             URLQueryItem(name: "pageSize", value: String(pageSize)),
             URLQueryItem(name: "orderBy", value: orderBy),
+            URLQueryItem(name: "showDeleted", value: "true"),
         ]
         if let pageToken { items.append(URLQueryItem(name: "pageToken", value: pageToken)) }
         comps.queryItems = items
@@ -40,6 +57,30 @@ enum ChatEndpoint {
 
     static func spaceReadState(spaceID: String, currentUser: String = "users/me") -> URL {
         base.appendingPathComponent("\(currentUser)/spaces/\(spaceID.replacingOccurrences(of: "spaces/", with: ""))/spaceReadState")
+    }
+
+    /// List the signed-in user's sidebar sections (system + custom).
+    /// `userResource` should be a full Chat user resource like `users/{id}`.
+    static func listSections(userResource: String, pageToken: String? = nil) -> URL {
+        var comps = URLComponents(url: base.appendingPathComponent("\(userResource)/sections"),
+                                  resolvingAgainstBaseURL: false)!
+        var items: [URLQueryItem] = [URLQueryItem(name: "pageSize", value: "100")]
+        if let pageToken { items.append(URLQueryItem(name: "pageToken", value: pageToken)) }
+        comps.queryItems = items
+        return comps.url!
+    }
+
+    /// List items in one specific section. The wildcard `sections/-/items`
+    /// endpoint returns HTTP 500 (confirmed Google API bug 2026-05) — fetch
+    /// per section instead. `sectionName` is the full resource name like
+    /// `users/{id}/sections/{sid}`.
+    static func listSectionItems(sectionName: String, pageToken: String? = nil) -> URL {
+        var comps = URLComponents(url: base.appendingPathComponent("\(sectionName)/items"),
+                                  resolvingAgainstBaseURL: false)!
+        var items: [URLQueryItem] = [URLQueryItem(name: "pageSize", value: "100")]
+        if let pageToken { items.append(URLQueryItem(name: "pageToken", value: pageToken)) }
+        comps.queryItems = items
+        return comps.url!
     }
 
     /// People API — batch directory listing for the current user's Workspace org.

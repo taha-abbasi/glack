@@ -47,9 +47,53 @@ actor ChatAPIClient {
         return try await getJSON(url)
     }
 
+    /// Send a plain-text message to a space. Returns the server's canonical
+    /// GMessage (with assigned name and createTime) which callers persist in
+    /// place of any optimistic stub.
+    func sendMessage(spaceID: String, text: String) async throws -> GMessage {
+        let url = ChatEndpoint.createMessage(spaceID: spaceID)
+        let body = ["text": text]
+        return try await postJSON(url, body: body)
+    }
+
+    /// Add a Unicode emoji reaction to a message. Returns the created Reaction.
+    /// `messageName` is the full resource path `spaces/X/messages/Y`.
+    func addUnicodeReaction(messageName: String, unicode: String) async throws -> GReaction {
+        let url = ChatEndpoint.createReaction(messageName: messageName)
+        let body = GReactionCreateBody(emoji: .init(unicode: unicode))
+        return try await postJSON(url, body: body)
+    }
+
     func listMembers(spaceID: String, pageToken: String? = nil, pageSize: Int = 100) async throws -> GListMembersResponse {
         let url = ChatEndpoint.listMembers(spaceID: spaceID, pageToken: pageToken, pageSize: pageSize)
         return try await getJSON(url)
+    }
+
+    /// List the signed-in user's sidebar sections (system + custom).
+    /// `userResource` must be a full Chat user resource like `users/{numeric-id}`.
+    func listAllSections(userResource: String) async throws -> [GSection] {
+        var all: [GSection] = []
+        var pageToken: String?
+        repeat {
+            let url = ChatEndpoint.listSections(userResource: userResource, pageToken: pageToken)
+            let response: GListSectionsResponse = try await getJSON(url)
+            if let s = response.sections { all.append(contentsOf: s) }
+            pageToken = response.nextPageToken
+        } while pageToken != nil && !pageToken!.isEmpty
+        return all
+    }
+
+    /// List items in one specific section, paginating through.
+    func listSectionItems(sectionName: String) async throws -> [GSectionItem] {
+        var all: [GSectionItem] = []
+        var pageToken: String?
+        repeat {
+            let url = ChatEndpoint.listSectionItems(sectionName: sectionName, pageToken: pageToken)
+            let response: GListSectionItemsResponse = try await getJSON(url)
+            if let items = response.sectionItems { all.append(contentsOf: items) }
+            pageToken = response.nextPageToken
+        } while pageToken != nil && !pageToken!.isEmpty
+        return all
     }
 
     /// People API: list all directory profiles in the current Workspace org.
@@ -140,6 +184,28 @@ actor ChatAPIClient {
         let (data, resp) = try await session.data(for: req)
         let http = resp as? HTTPURLResponse
         let status = http?.statusCode ?? 0
+        guard 200..<300 ~= status else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ChatAPIError.http(status: status, body: body)
+        }
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            throw ChatAPIError.malformedResponse
+        }
+    }
+
+    private func postJSON<B: Encodable, T: Decodable>(_ url: URL, body: B) async throws -> T {
+        let token = try await Session.shared.accessToken()
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(body)
+
+        let (data, resp) = try await session.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard 200..<300 ~= status else {
             let body = String(data: data, encoding: .utf8) ?? ""
             throw ChatAPIError.http(status: status, body: body)

@@ -9,4 +9,5 @@ enum Log {
     static let db       = Logger(subsystem: "com.github.taha-abbasi.glack", category: "db")
     static let sync     = Logger(subsystem: "com.github.taha-abbasi.glack", category: "sync")
     static let ui       = Logger(subsystem: "com.github.taha-abbasi.glack", category: "ui")
+    static let app      = Logger(subsystem: "com.github.taha-abbasi.glack", category: "app")
 }

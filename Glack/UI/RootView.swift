@@ -74,16 +74,21 @@ private struct SignedInView: View {
     @State private var messagesObserver = MessagesObserver()
     @State private var usersObserver = UsersObserver()
     @State private var membersObserver = MembersObserver()
+    @State private var sectionsObserver = SectionsObserver()
+    @State private var unreadObserver = UnreadObserver()
     @State private var sync = Sync.shared
     @State private var selectedSpaceID: String?
+    @State private var paletteOpen: Bool = false
 
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
                 SidebarView(
                     observer: spacesObserver,
+                    sections: sectionsObserver,
                     users: usersObserver,
                     members: membersObserver,
+                    unread: unreadObserver,
                     currentUserID: session.currentUserID,
                     selection: $selectedSpaceID
                 )
@@ -94,8 +99,13 @@ private struct SignedInView: View {
             .navigationTitle("Glack")
         } detail: {
             if let id = selectedSpaceID {
-                ConversationView(spaceID: id, observer: messagesObserver, users: usersObserver)
-                    .navigationTitle(detailTitle(for: id))
+                ConversationView(
+                    spaceID: id,
+                    observer: messagesObserver,
+                    users: usersObserver,
+                    space: spacesObserver.spaces.first(where: { $0.id == id })
+                )
+                .navigationTitle(detailTitle(for: id))
             } else {
                 ContentUnavailableView(
                     "Pick a conversation",
@@ -106,16 +116,43 @@ private struct SignedInView: View {
         }
         .task {
             spacesObserver.start()
+            sectionsObserver.start()
             usersObserver.start()
             membersObserver.start()
+            unreadObserver.start()
             sync.start()
+            await NotificationManager.shared.requestAuthorizationIfNeeded()
+        }
+        .onChange(of: selectedSpaceID) { _, new in
+            if let id = new {
+                Task { await sync.markRead(spaceID: id) }
+            }
         }
         .onDisappear {
             sync.stop()
             spacesObserver.stop()
+            sectionsObserver.stop()
             usersObserver.stop()
             membersObserver.stop()
             messagesObserver.stop()
+            unreadObserver.stop()
+        }
+        .background(
+            Button("Open command palette") { paletteOpen = true }
+                .keyboardShortcut("k", modifiers: .command)
+                .opacity(0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        )
+        .sheet(isPresented: $paletteOpen) {
+            CommandPaletteView(
+                spacesObserver: spacesObserver,
+                usersObserver: usersObserver,
+                membersObserver: membersObserver,
+                currentUserID: session.currentUserID,
+                selectedSpaceID: $selectedSpaceID,
+                isPresented: $paletteOpen
+            )
         }
     }
 

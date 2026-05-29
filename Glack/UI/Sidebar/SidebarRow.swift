@@ -1,10 +1,14 @@
+import AppKit
 import SwiftUI
 
 struct SidebarRow: View {
     let space: SpaceRecord
     @Bindable var users: UsersObserver
     @Bindable var members: MembersObserver
+    let unreadCount: Int
     let currentUserID: String?
+
+    @State private var hovering: Bool = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -13,10 +17,32 @@ struct SidebarRow: View {
                 Text(displayName)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .font(.system(size: 13, weight: unreadCount > 0 ? .semibold : .regular))
             }
             Spacer(minLength: 0)
+            if unreadCount > 0 { unreadBadge }
         }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(hovering ? Color.primary.opacity(0.07) : Color.clear)
+        )
+        .contentShape(Rectangle())
+        .onHover { hover in
+            withAnimation(.easeOut(duration: 0.08)) { hovering = hover }
+            if hover { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+        }
+    }
+
+    private var unreadBadge: some View {
+        Text(unreadCount > 99 ? "99+" : "\(unreadCount)")
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(Color.accentColor))
     }
 
     @ViewBuilder
@@ -48,44 +74,12 @@ struct SidebarRow: View {
     }
 
     private var displayName: String {
-        if let dn = space.displayName, !dn.isEmpty { return dn }
-        // App DMs (Giphy, Drive, etc.) — Chat API doesn't expose bot names
-        // through user-auth member listings. Show "App" + the bot's ID tail
-        // so each is at least distinguishable.
-        if space.singleUserBotDm == true {
-            let otherIDs = otherMemberIDs
-            if let id = otherIDs.first { return "App \(String(id.suffix(4)))" }
-            return "App"
-        }
-        // No server-provided name — derive from members for DMs / group chats.
-        let otherIDs = otherMemberIDs
-        if !otherIDs.isEmpty {
-            // Prefer real People-API-resolved names when available.
-            let realNames = otherIDs.compactMap { users.displayName(for: $0) }
-            if realNames.count == otherIDs.count {
-                return realNames.joined(separator: ", ")
-            }
-            // Mixed (some known, some not) or all unknown — show "Member XXXX"
-            // for unresolved using last 4 chars of their user ID so each DM
-            // is at least distinguishable.
-            let parts: [String] = otherIDs.map { id in
-                if let n = users.displayName(for: id), !n.isEmpty { return n }
-                return "Member \(String(id.suffix(4)))"
-            }
-            return parts.joined(separator: ", ")
-        }
-        switch space.type {
-        case .directMessage: return "Direct Message"
-        case .groupChat:     return "Group Chat"
-        default:             return space.id
-        }
+        SpaceDisplay.name(for: space, users: users, members: members, currentUserID: currentUserID)
     }
 
     /// Members of this space EXCLUDING the current user.
     private var otherMemberIDs: [String] {
-        let all = members.membersBySpace[space.id] ?? []
-        guard let me = currentUserID else { return all }
-        return all.filter { $0 != me }
+        SpaceDisplay.otherMemberIDs(space: space, members: members, currentUserID: currentUserID)
     }
 
     /// Treat unthreaded spaces the same as DMs for avatar/name purposes —

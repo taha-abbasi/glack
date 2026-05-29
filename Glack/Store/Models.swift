@@ -61,6 +61,7 @@ struct MessageRecord: Codable, FetchableRecord, MutablePersistableRecord, Identi
     var deletedAt: Date?
     var attachmentCount: Int
     var rawJson: String?
+    var reactionsJson: String?
 
     enum Columns {
         static let id = Column(CodingKeys.id)
@@ -70,6 +71,14 @@ struct MessageRecord: Codable, FetchableRecord, MutablePersistableRecord, Identi
         static let updatedAt = Column(CodingKeys.updatedAt)
         static let threadId = Column(CodingKeys.threadId)
         static let deletedAt = Column(CodingKeys.deletedAt)
+    }
+
+    /// Decoded reaction summaries for this message. Returns [] when none or
+    /// when the JSON column is missing/malformed — never throws.
+    var reactions: [GEmojiReactionSummary] {
+        guard let json = reactionsJson, !json.isEmpty,
+              let data = json.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([GEmojiReactionSummary].self, from: data)) ?? []
     }
 }
 
@@ -98,6 +107,43 @@ struct UserRecord: Codable, FetchableRecord, MutablePersistableRecord, Identifia
         static let displayName = Column(CodingKeys.displayName)
         static let email = Column(CodingKeys.email)
     }
+}
+
+struct SectionRecord: Codable, FetchableRecord, MutablePersistableRecord, Identifiable, Hashable {
+    static let databaseTableName = "section"
+
+    var id: String                       // "users/me/sections/{id}"
+    var displayName: String?
+    var sectionType: String?
+    var systemSectionType: String?
+    var sortOrder: Int
+
+    enum SystemType: String {
+        case directMessages = "DEFAULT_DIRECT_MESSAGES"
+        case spaces         = "DEFAULT_SPACES"
+        case apps           = "DEFAULT_APPS"
+    }
+
+    var systemType: SystemType? { systemSectionType.flatMap(SystemType.init(rawValue:)) }
+
+    /// What to render as the section's header in the sidebar.
+    var displayLabel: String {
+        if let dn = displayName, !dn.isEmpty { return dn }
+        switch systemType {
+        case .directMessages: return "Direct Messages"
+        case .spaces:         return "Spaces"
+        case .apps:           return "Apps"
+        case .none:           return "Other"
+        }
+    }
+}
+
+struct SectionItemRecord: Codable, FetchableRecord, MutablePersistableRecord, Hashable {
+    static let databaseTableName = "section_item"
+
+    var sectionId: String
+    var spaceId: String
+    var sortOrder: Int
 }
 
 struct MemberRecord: Codable, FetchableRecord, MutablePersistableRecord, Hashable {

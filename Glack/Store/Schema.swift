@@ -108,6 +108,35 @@ enum Schema {
             try db.create(indexOn: "user", columns: ["email"])
         }
 
+        m.registerMigration("v4-sidebar-sections") { db in
+            try db.create(table: "section") { t in
+                t.column("id", .text).primaryKey()          // "users/me/sections/{id}"
+                t.column("displayName", .text)
+                t.column("sectionType", .text)              // "SYSTEM" | "CUSTOM"
+                t.column("systemSectionType", .text)        // "DEFAULT_DIRECT_MESSAGES" | "DEFAULT_SPACES" | "DEFAULT_APPS"
+                t.column("sortOrder", .integer).notNull().defaults(to: 0)
+            }
+
+            try db.create(table: "section_item") { t in
+                t.column("sectionId", .text).notNull()
+                    .references("section", onDelete: .cascade)
+                t.column("spaceId", .text).notNull()
+                    .references("space", onDelete: .cascade)
+                t.column("sortOrder", .integer).notNull().defaults(to: 0)
+                t.primaryKey(["sectionId", "spaceId"])
+            }
+            try db.create(indexOn: "section_item", columns: ["spaceId"])
+        }
+
+        m.registerMigration("v5-message-reactions") { db in
+            try db.alter(table: "message") { t in
+                // JSON-encoded [GEmojiReactionSummary] for the row. Stored
+                // alongside the message since the API returns them inline
+                // on every listMessages page; no separate table needed yet.
+                t.add(column: "reactionsJson", .text)
+            }
+        }
+
         return m
     }
 }

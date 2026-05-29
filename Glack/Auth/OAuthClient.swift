@@ -73,6 +73,10 @@ final class OAuthClient: NSObject {
         "https://www.googleapis.com/auth/chat.memberships",
         "https://www.googleapis.com/auth/chat.users.readstate",
         "https://www.googleapis.com/auth/chat.spaces.pins",
+        // Sidebar sections — read the user's custom + system section
+        // organization (DEFAULT_DIRECT_MESSAGES / DEFAULT_SPACES /
+        // DEFAULT_APPS + any custom sections the user has created).
+        "https://www.googleapis.com/auth/chat.users.sections.readonly",
         // People API — fallback for non-admin users (Admin SDK 403s for them).
         // Returns silhouettes for non-self users regardless of source/readMask
         // combo — see [[glack-directory-architecture]] for the full empirical
