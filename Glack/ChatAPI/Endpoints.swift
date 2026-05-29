@@ -62,19 +62,52 @@ enum ChatEndpoint {
 
     /// People API — `people:batchGet` resolves a known list of user resource
     /// names (e.g. derived from message senders / space members) into profile
-    /// info. Up to 50 resource names per call. Useful when listDirectoryPeople
-    /// returns empty because of admin sharing settings.
+    /// info. Up to 50 resource names per call.
+    ///
+    /// Explicitly requests all source types (PROFILE + CONTACT + DOMAIN_CONTACT)
+    /// — with CONTACT/DOMAIN_CONTACT, Google merges the user's contacts photo
+    /// (often the real one for coworkers, even when PROFILE is a silhouette).
+    /// Default would be PROFILE + CONTACT but DOMAIN_CONTACT also helps for
+    /// Workspace org members.
     static func peopleBatchGet(resourceNames: [String]) -> URL {
         var comps = URLComponents(url: peopleBase.appendingPathComponent("people:batchGet"),
                                   resolvingAgainstBaseURL: false)!
         var items: [URLQueryItem] = [
-            URLQueryItem(name: "personFields", value: "names,photos,emailAddresses,metadata"),
+            URLQueryItem(name: "personFields", value: "names,photos,emailAddresses,coverPhotos,metadata"),
+            URLQueryItem(name: "sources", value: "READ_SOURCE_TYPE_PROFILE"),
+            URLQueryItem(name: "sources", value: "READ_SOURCE_TYPE_CONTACT"),
+            URLQueryItem(name: "sources", value: "READ_SOURCE_TYPE_DOMAIN_CONTACT"),
         ]
         for rn in resourceNames {
             items.append(URLQueryItem(name: "resourceNames", value: rn))
         }
         comps.queryItems = items
         return comps.url!
+    }
+
+    /// People API — search the Workspace directory by query (typically email
+    /// or display name). Empirically returns real Workspace photos that
+    /// `people:batchGet` does not, for the same users. This is what Workspace
+    /// web apps (Gmail/Chat) use for org-member avatar lookups.
+    static func peopleSearchDirectory(query: String) -> URL {
+        var comps = URLComponents(url: peopleBase.appendingPathComponent("people:searchDirectoryPeople"),
+                                  resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "query", value: query),
+            URLQueryItem(name: "sources", value: "DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"),
+            URLQueryItem(name: "sources", value: "DIRECTORY_SOURCE_TYPE_DOMAIN_CONTACT"),
+            URLQueryItem(name: "readMask", value: "names,photos,emailAddresses,metadata"),
+            URLQueryItem(name: "pageSize", value: "10"),
+        ]
+        return comps.url!
+    }
+
+    /// Admin SDK Directory API — get a single user's photo as inline base64
+    /// bytes (UserPhoto.photoData). Returns the REAL user-uploaded photo,
+    /// not the silhouette stripped by People API. `userKey` can be the
+    /// numeric ID or primary email.
+    static func adminUserPhoto(userKey: String) -> URL {
+        adminBase.appendingPathComponent("users/\(userKey)/photos/thumbnail")
     }
 
     /// Admin SDK Directory API — list every user in the signed-in admin's

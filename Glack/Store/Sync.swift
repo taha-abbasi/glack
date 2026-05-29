@@ -2,6 +2,18 @@ import Foundation
 import GRDB
 import Observation
 
+/// Admin SDK returns base64 in the URL-safe variant (uses `-` and `_`
+/// instead of `+` and `/`). Standard `Data(base64Encoded:)` won't decode it.
+extension Data {
+    init?(base64URLEncoded s: String) {
+        var fixed = s.replacingOccurrences(of: "-", with: "+")
+                     .replacingOccurrences(of: "_", with: "/")
+        while fixed.count % 4 != 0 { fixed.append("=") }
+        guard let data = Data(base64Encoded: fixed) else { return nil }
+        self = data
+    }
+}
+
 /// Pulls spaces + recent messages from the Chat API into the local DB.
 /// Phase 2 scope: snapshot on launch, recent page per space, periodic re-sync.
 @MainActor
@@ -224,14 +236,21 @@ final class Sync {
 
     /// Try the Admin SDK Directory API path. Returns true if we successfully
     /// populated the user table (signed-in user is a Workspace admin), false
-    /// if we should fall back to People API (e.g. 403 — not an admin, or
-    /// scope not yet granted via a fresh sign-in).
+    /// if we should fall back to People API.
+    ///
+    /// Admin SDK gives us authoritative names + emails for the whole org, but
+    /// its `thumbnailPhotoUrl` is the *Workspace directory* photo (admins set
+    /// these explicitly — usually defaults to a silhouette). For real
+    /// personal profile photos we layer People API photos on top, dropping
+    /// any flagged `default: true`.
     private func syncViaAdminDirectory() async -> Bool {
         do {
             Log.sync.info("syncViaAdminDirectory() — trying admin path")
             let users = try await ChatAPIClient.shared.listAdminUsers()
             Log.sync.info("Admin Directory returned \(users.count) users")
             guard !users.isEmpty else { return false }
+            // Persist Admin SDK data — names + emails. Leave photoUrl=nil so the
+            // People API pass can fill in only real (non-default) photos.
             try await Database.shared.write { db in
                 let now = Date()
                 for u in users where u.suspended != true {
@@ -241,18 +260,74 @@ final class Sync {
                         displayName: u.name?.fullName,
                         givenName: u.name?.givenName,
                         familyName: u.name?.familyName,
-                        photoUrl: u.thumbnailPhotoUrl,
+                        photoUrl: nil,
                         email: u.primaryEmail,
                         lastSyncedAt: now
                     )
                     try record.save(db)
                 }
             }
+            // Second pass: enrich with real photos via People API batchGet.
+            // (isDefault filter already drops Google's silhouettes.)
+            await enrichPhotosFromPeopleAPI(userIDs: users.map { "users/\($0.id)" })
             return true
         } catch {
             Log.sync.info("Admin Directory not usable: \(error.localizedDescription, privacy: .public) — falling back to People API")
             return false
         }
+    }
+
+    /// Resolve real Workspace photos per-user via Admin SDK's `users.photos.get`
+    /// endpoint, which returns the user's actual photo as inline base64 bytes
+    /// (not a URL). This is the only path that surfaces the photo Workspace
+    /// web apps render — People API silhouettes a non-self user's profile
+    /// photo regardless of project location or sources/readMask combo.
+    ///
+    /// We decode the base64 and save as a PNG in Application Support, then
+    /// store a `file://` URL in user.photoUrl so CachedAvatar loads from disk.
+    private func enrichPhotosFromPeopleAPI(userIDs: [String]) async {
+        guard !userIDs.isEmpty else { return }
+        let recordsByID: [String: UserRecord] = (try? await Database.shared.read { db in
+            try UserRecord.fetchAll(db).reduce(into: [String: UserRecord]()) { acc, r in acc[r.id] = r }
+        }) ?? [:]
+        let photosDir = (try? Self.photosDirectory()) ?? URL(fileURLWithPath: "/tmp")
+
+        var resolved = 0
+        for userID in userIDs {
+            guard let record = recordsByID[userID] else { continue }
+            // Admin SDK userKey: numeric id (strip our `users/` prefix) OR email.
+            let userKey = userID.replacingOccurrences(of: "users/", with: "")
+            do {
+                guard let photo = try await ChatAPIClient.shared.adminUserPhoto(userKey: userKey),
+                      let b64 = photo.photoData,
+                      let data = Data(base64URLEncoded: b64) else { continue }
+                let ext = (photo.mimeType ?? "image/png").contains("jpeg") ? "jpg" : "png"
+                let file = photosDir.appendingPathComponent("\(userKey).\(ext)")
+                try data.write(to: file)
+                try await Database.shared.write { db in
+                    if var r = try UserRecord.fetchOne(db, key: userID) {
+                        r.photoUrl = file.absoluteString
+                        try r.update(db)
+                    }
+                }
+                resolved += 1
+            } catch {
+                Log.sync.error("adminUserPhoto(\(userKey, privacy: .public)) failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        Log.sync.info("photo enrichment: resolved \(resolved)/\(userIDs.count) real photos via Admin SDK users.photos.get")
+    }
+
+    /// `~/Library/Application Support/Glack/avatars/` — created on first use.
+    private static func photosDirectory() throws -> URL {
+        let base = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ).appendingPathComponent("Glack/avatars")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base
     }
 
     private func syncMembers(spaceID: String) async {

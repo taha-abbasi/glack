@@ -137,6 +137,12 @@ struct GBatchGetPeopleResponse: Decodable {
     let responses: [GPersonResponse]?
 }
 
+struct GSearchDirectoryPeopleResponse: Decodable {
+    let people: [GPerson]?
+    let nextPageToken: String?
+    let totalSize: Int?
+}
+
 // MARK: - Admin SDK Directory API DTOs
 
 struct GAdminUserName: Decodable {
@@ -156,6 +162,18 @@ struct GAdminUser: Decodable {
 struct GAdminUsersListResponse: Decodable {
     let users: [GAdminUser]?
     let nextPageToken: String?
+}
+
+/// Admin SDK users.photos.get returns photo bytes inline (base64), not a URL.
+/// Empirically this returns the *real* uploaded photo for org users — the
+/// same photo Workspace web apps render — bypassing the People API silhouette.
+struct GAdminUserPhoto: Decodable {
+    let id: String?
+    let primaryEmail: String?
+    let mimeType: String?
+    let width: Int?
+    let height: Int?
+    let photoData: String?   // base64-encoded image bytes (URL-safe variant)
 }
 
 // MARK: - Date parsing

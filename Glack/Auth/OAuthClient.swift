@@ -79,6 +79,10 @@ final class OAuthClient: NSObject {
         // a Workspace admin. Provides names + photos + emails that People API
         // strips for non-admin org members.
         "https://www.googleapis.com/auth/admin.directory.user.readonly",
+        // Contacts — unlocks the user's auto-saved contacts (CONTACT source).
+        // Empirically: Chat web app's avatars resolve through this source for
+        // coworkers without uploaded personal profile photos.
+        "https://www.googleapis.com/auth/contacts.readonly",
     ]
 
     private var clientID: String {

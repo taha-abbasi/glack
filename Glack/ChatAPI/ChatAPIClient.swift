@@ -66,6 +66,35 @@ actor ChatAPIClient {
         return all
     }
 
+    /// Admin SDK: fetch a single user's photo as inline base64 bytes.
+    /// Returns nil if the user has no photo (404), or any other error.
+    /// `userKey` is the numeric Google user ID or primary email.
+    func adminUserPhoto(userKey: String) async throws -> GAdminUserPhoto? {
+        let url = ChatEndpoint.adminUserPhoto(userKey: userKey)
+        do {
+            let photo: GAdminUserPhoto = try await getJSON(url)
+            return photo
+        } catch ChatAPIError.http(let status, _) where status == 404 {
+            return nil  // user genuinely has no photo set
+        }
+    }
+
+    /// People API: search Workspace directory by query (email). Returns the
+    /// real Workspace photo URLs that `people:batchGet` hides — same source
+    /// Gmail/Chat web apps use for org-member avatars.
+    func searchDirectoryPerson(query: String) async throws -> GPerson? {
+        let url = ChatEndpoint.peopleSearchDirectory(query: query)
+        let response: GSearchDirectoryPeopleResponse = try await getJSON(url)
+        // searchDirectory returns up to pageSize results; pick the one whose
+        // primary email matches the query (case-insensitive) when possible.
+        if let exact = response.people?.first(where: { p in
+            (p.emailAddresses?.compactMap(\.value) ?? []).contains { $0.caseInsensitiveCompare(query) == .orderedSame }
+        }) {
+            return exact
+        }
+        return response.people?.first
+    }
+
     /// Admin SDK Directory API: list all users in the signed-in admin's
     /// Workspace customer. Returns full data (name, email, photo) bypassing
     /// People API's privacy stripping. Throws 403 if signed-in user isn't an
