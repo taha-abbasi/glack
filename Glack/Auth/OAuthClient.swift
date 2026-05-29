@@ -73,16 +73,16 @@ final class OAuthClient: NSObject {
         "https://www.googleapis.com/auth/chat.memberships",
         "https://www.googleapis.com/auth/chat.users.readstate",
         "https://www.googleapis.com/auth/chat.spaces.pins",
-        // People API — directory lookup for user names + photos (Phase 2 polish).
+        // People API — fallback for non-admin users (Admin SDK 403s for them).
+        // Returns silhouettes for non-self users regardless of source/readMask
+        // combo — see [[glack-directory-architecture]] for the full empirical
+        // matrix we tested.
         "https://www.googleapis.com/auth/directory.readonly",
-        // Admin SDK Directory API — full org user data when signed-in user is
-        // a Workspace admin. Provides names + photos + emails that People API
-        // strips for non-admin org members.
+        // Admin SDK Directory API — the ONLY public Google API that returns
+        // real org-member photos. Used via users.photos.get (base64 photoData
+        // bypasses the People API privacy strip). Requires signed-in user to
+        // be a Workspace admin.
         "https://www.googleapis.com/auth/admin.directory.user.readonly",
-        // Contacts — unlocks the user's auto-saved contacts (CONTACT source).
-        // Empirically: Chat web app's avatars resolve through this source for
-        // coworkers without uploaded personal profile photos.
-        "https://www.googleapis.com/auth/contacts.readonly",
     ]
 
     private var clientID: String {
