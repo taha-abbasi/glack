@@ -4,6 +4,13 @@ import SwiftUI
 struct MessageRow: View {
     let message: MessageRecord
     @Bindable var users: UsersObserver
+    /// Number of messages in this row's thread (parent + replies). When > 1,
+    /// the row shows a "View thread" affordance. Nil = caller doesn't track
+    /// thread counts (thread side panel itself, search results, etc.).
+    var threadReplyCount: Int? = nil
+    /// Callback fired when the user clicks "View thread" — opens the side
+    /// panel scoped to this row's threadId.
+    var onOpenThread: ((String) -> Void)? = nil
 
     @State private var rowHovering: Bool = false
     @State private var toolbarHovering: Bool = false
@@ -37,6 +44,7 @@ struct MessageRow: View {
                 if !message.reactions.isEmpty {
                     reactionStrip
                 }
+                threadAffordance
             }
             Spacer(minLength: 0)
         }
@@ -153,6 +161,34 @@ struct MessageRow: View {
         let first = parts.first?.first.map(String.init) ?? "?"
         let last = parts.dropFirst().first?.first.map(String.init) ?? ""
         return (first + last).uppercased()
+    }
+
+    /// "View thread · N replies" link, shown when this row's thread has
+    /// more than just the parent. Tapping calls back into the parent view
+    /// to open the thread side panel.
+    @ViewBuilder
+    private var threadAffordance: some View {
+        if let count = threadReplyCount, count > 1, let threadID = message.threadId, let cb = onOpenThread {
+            Button {
+                cb(threadID)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                        .font(.system(size: 10, weight: .medium))
+                    Text("\(count - 1) repl\(count == 2 ? "y" : "ies")")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.accentColor.opacity(0.10))
+                )
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 2)
+        }
     }
 
     private var timeString: String {

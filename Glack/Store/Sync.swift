@@ -109,12 +109,12 @@ final class Sync {
         return str
     }
 
-    /// Send a plain-text message with optimistic local insert. Writes a
-    /// `pending-{uuid}` row immediately so the UI updates without waiting
-    /// on the network; on success swaps it for the server's canonical row;
-    /// on failure removes the temp row and rethrows so the caller can
-    /// restore the composer text.
-    func sendMessage(spaceID: String, text: String) async throws {
+    /// Send a plain-text message with optimistic local insert, optionally
+    /// as a reply in an existing thread. Writes a `pending-{uuid}` row
+    /// immediately so the UI updates without waiting on the network; on
+    /// success swaps it for the server's canonical row; on failure removes
+    /// the temp row and rethrows so the caller can restore the composer.
+    func sendMessage(spaceID: String, text: String, threadName: String? = nil) async throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let tempID = "pending-\(UUID().uuidString)"
@@ -129,7 +129,7 @@ final class Sync {
             textPlain: text,
             createdAt: now,
             updatedAt: nil,
-            threadId: nil,
+            threadId: threadName,
             deletedAt: nil,
             attachmentCount: 0,
             rawJson: nil,
@@ -140,7 +140,7 @@ final class Sync {
             try r.insert(db)
         }
         do {
-            let server = try await ChatAPIClient.shared.sendMessage(spaceID: spaceID, text: text)
+            let server = try await ChatAPIClient.shared.sendMessage(spaceID: spaceID, text: text, threadName: threadName)
             try await Database.shared.write { db in
                 try MessageRecord.deleteOne(db, key: tempID)
                 var record = MessageRecord(

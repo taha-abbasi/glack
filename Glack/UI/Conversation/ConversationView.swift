@@ -5,6 +5,9 @@ struct ConversationView: View {
     @Bindable var observer: MessagesObserver
     @Bindable var users: UsersObserver
     let space: SpaceRecord?
+    @Binding var selectedThreadID: String?
+
+    @State private var threadCounts = ThreadCountsObserver()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,12 +24,16 @@ struct ConversationView: View {
             Session.shared.currentlyViewingSpaceID = spaceID
             await Sync.shared.markRead(spaceID: spaceID)
             observer.observe(spaceID: spaceID)
+            threadCounts.observe(spaceID: spaceID)
+            // Close any open thread when the user navigates to a new space.
+            selectedThreadID = nil
             await Sync.shared.syncVisibleSpace(spaceID)
         }
         .onDisappear {
             if Session.shared.currentlyViewingSpaceID == spaceID {
                 Session.shared.currentlyViewingSpaceID = nil
             }
+            threadCounts.stop()
         }
     }
 
@@ -43,9 +50,14 @@ struct ConversationView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(observer.messages) { msg in
-                            MessageRow(message: msg, users: users)
-                                .id(msg.id)
-                                .opacity(msg.id.hasPrefix("pending-") ? 0.55 : 1.0)
+                            MessageRow(
+                                message: msg,
+                                users: users,
+                                threadReplyCount: msg.threadId.flatMap { threadCounts.counts[$0] },
+                                onOpenThread: { tid in selectedThreadID = tid }
+                            )
+                            .id(msg.id)
+                            .opacity(msg.id.hasPrefix("pending-") ? 0.55 : 1.0)
                         }
                     }
                     .padding(.horizontal, 8)

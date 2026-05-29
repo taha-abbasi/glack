@@ -21,12 +21,18 @@ enum ChatEndpoint {
         base.appendingPathComponent("\(messageName)/reactions")
     }
 
-    /// POST a new message to a space. `messageReplyOption` controls thread
-    /// behavior — left as the default (NEW thread per message) so the same
-    /// endpoint works for both threaded spaces and DMs; pass `threadKey` /
-    /// `thread.name` later for explicit thread replies (Phase 4b).
-    static func createMessage(spaceID: String) -> URL {
-        base.appendingPathComponent("\(spaceID)/messages")
+    /// POST a new message to a space. When `threadReply` is true, the URL
+    /// carries `messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD` so
+    /// the message attaches to the thread named in the request body — Chat
+    /// will fall back to starting a new thread if the named one is missing.
+    static func createMessage(spaceID: String, threadReply: Bool = false) -> URL {
+        let base = self.base.appendingPathComponent("\(spaceID)/messages")
+        guard threadReply else { return base }
+        var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "messageReplyOption", value: "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD")
+        ]
+        return comps.url!
     }
 
     static func listMessages(spaceID: String, pageToken: String? = nil, pageSize: Int = 100, orderBy: String = "createTime desc") -> URL {

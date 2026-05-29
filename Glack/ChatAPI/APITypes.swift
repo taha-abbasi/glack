@@ -96,6 +96,12 @@ struct GReactionCreateBody: Encodable {
     let emoji: EmojiBody
 }
 
+struct GMessageCreateBody: Encodable {
+    let text: String
+    let thread: ThreadRef?
+    struct ThreadRef: Encodable { let name: String }
+}
+
 struct GListMessagesResponse: Decodable {
     let messages: [GMessage]?
     let nextPageToken: String?

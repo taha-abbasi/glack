@@ -47,11 +47,17 @@ actor ChatAPIClient {
         return try await getJSON(url)
     }
 
-    /// Send a plain-text message to a space. Returns the server's canonical
-    /// GMessage (with assigned name and createTime) which callers persist in
-    /// place of any optimistic stub.
-    func sendMessage(spaceID: String, text: String) async throws -> GMessage {
-        let url = ChatEndpoint.createMessage(spaceID: spaceID)
+    /// Send a plain-text message to a space, optionally as a reply in an
+    /// existing thread. `threadName` is the full `spaces/X/threads/T`
+    /// resource — when set, the request uses `messageReplyOption=
+    /// REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD` so the server attaches the
+    /// message to that thread (or starts a fresh one if it's gone).
+    func sendMessage(spaceID: String, text: String, threadName: String? = nil) async throws -> GMessage {
+        let url = ChatEndpoint.createMessage(spaceID: spaceID, threadReply: threadName != nil)
+        if let threadName {
+            let body = GMessageCreateBody(text: text, thread: .init(name: threadName))
+            return try await postJSON(url, body: body)
+        }
         let body = ["text": text]
         return try await postJSON(url, body: body)
     }

@@ -78,6 +78,7 @@ private struct SignedInView: View {
     @State private var unreadObserver = UnreadObserver()
     @State private var sync = Sync.shared
     @State private var selectedSpaceID: String?
+    @State private var selectedThreadID: String?
     @State private var paletteOpen: Bool = false
     @State private var searchOpen: Bool = false
 
@@ -100,12 +101,28 @@ private struct SignedInView: View {
             .navigationTitle("Glack")
         } detail: {
             if let id = selectedSpaceID {
-                ConversationView(
-                    spaceID: id,
-                    observer: messagesObserver,
-                    users: usersObserver,
-                    space: spacesObserver.spaces.first(where: { $0.id == id })
-                )
+                HStack(spacing: 0) {
+                    ConversationView(
+                        spaceID: id,
+                        observer: messagesObserver,
+                        users: usersObserver,
+                        space: spacesObserver.spaces.first(where: { $0.id == id }),
+                        selectedThreadID: $selectedThreadID
+                    )
+                    if let threadID = selectedThreadID {
+                        Divider()
+                        ThreadView(
+                            threadID: threadID,
+                            spaceID: id,
+                            users: usersObserver,
+                            isOpen: Binding(
+                                get: { selectedThreadID != nil },
+                                set: { if !$0 { selectedThreadID = nil } }
+                            )
+                        )
+                        .frame(width: 380)
+                    }
+                }
                 .navigationTitle(detailTitle(for: id))
             } else {
                 ContentUnavailableView(

@@ -201,6 +201,90 @@ final class MembersObserver {
     }
 }
 
+/// Per-thread reply counts for a single space. Drives the "Replies (N)"
+/// affordance on the parent message in the conversation view.
+@MainActor
+@Observable
+final class ThreadCountsObserver {
+    /// `[threadId: total messages in that thread (including parent)]`.
+    private(set) var counts: [String: Int] = [:]
+    private(set) var spaceID: String?
+    private var task: Task<Void, Never>?
+
+    func observe(spaceID: String) {
+        guard self.spaceID != spaceID else { return }
+        self.spaceID = spaceID
+        counts = [:]
+        task?.cancel()
+        let observation = ValueObservation.tracking { db -> [String: Int] in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT threadId, COUNT(*) AS n
+                FROM message
+                WHERE spaceId = ? AND threadId IS NOT NULL AND deletedAt IS NULL
+                GROUP BY threadId
+            """, arguments: [spaceID])
+            var map: [String: Int] = [:]
+            for r in rows {
+                guard let id: String = r["threadId"], let n: Int = r["n"] else { continue }
+                map[id] = n
+            }
+            return map
+        }
+        task = Task { [weak self] in
+            do {
+                for try await rows in observation.values(in: Database.shared) {
+                    self?.counts = rows
+                }
+            } catch {}
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+        spaceID = nil
+        counts = [:]
+    }
+}
+
+/// Live messages within a single thread, in chronological order. Used by
+/// the thread side panel.
+@MainActor
+@Observable
+final class ThreadMessagesObserver {
+    private(set) var messages: [MessageRecord] = []
+    private(set) var threadID: String?
+    private var task: Task<Void, Never>?
+
+    func observe(threadID: String) {
+        guard self.threadID != threadID else { return }
+        self.threadID = threadID
+        messages = []
+        task?.cancel()
+        let observation = ValueObservation.tracking { db in
+            try MessageRecord
+                .filter(MessageRecord.Columns.threadId == threadID)
+                .filter(MessageRecord.Columns.deletedAt == nil)
+                .order(MessageRecord.Columns.createdAt.asc)
+                .fetchAll(db)
+        }
+        task = Task { [weak self] in
+            do {
+                for try await rows in observation.values(in: Database.shared) {
+                    self?.messages = rows
+                }
+            } catch {}
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+        threadID = nil
+        messages = []
+    }
+}
+
 /// Live messages for a single space, sorted by createTime asc, deleted excluded.
 @MainActor
 @Observable
