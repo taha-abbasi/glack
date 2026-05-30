@@ -13,6 +13,10 @@ struct RichTextEditor: NSViewRepresentable {
     let maxHeight: CGFloat
     let onSubmit: () -> Void
     var onHeightChange: (CGFloat) -> Void
+    /// Optional autocomplete state — set by ComposerView, mutated by
+    /// Coordinator as the user types `:foo` patterns. When nil, no
+    /// autocomplete UI runs.
+    var autocompleteState: EmojiAutocompleteState? = nil
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -80,6 +84,7 @@ struct RichTextEditor: NSViewRepresentable {
     static let defaultFont = NSFont.systemFont(ofSize: 13)
     static let codeFont = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
 
+    @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: RichTextEditor
         weak var textView: NSTextView?
@@ -98,6 +103,59 @@ struct RichTextEditor: NSViewRepresentable {
             if !isAutoformatting {
                 applyAutoformat(tv: tv)
             }
+            updateAutocomplete(tv: tv)
+        }
+
+        /// Detect the current `:prefix` the user is typing (if any) and
+        /// push it into the shared autocomplete state. Walks at most ~32
+        /// chars back from the caret looking for the opening `:`; any
+        /// whitespace or non-alphanumeric breaks the pattern.
+        private func updateAutocomplete(tv: NSTextView) {
+            guard let state = parent.autocompleteState else { return }
+            let sel = tv.selectedRange()
+            guard sel.length == 0 else { state.dismiss(); return }
+            let ns = tv.string as NSString
+            let caret = sel.location
+            guard caret > 0, caret <= ns.length else { state.dismiss(); return }
+            var i = caret - 1
+            while i >= 0, (caret - i) < 32 {
+                let c = ns.substring(with: NSRange(location: i, length: 1))
+                if c == ":" {
+                    let prefix = ns.substring(with: NSRange(location: i + 1, length: caret - i - 1))
+                    state.update(prefix: prefix)
+                    return
+                }
+                if c == " " || c == "\n" || c == "\t" {
+                    state.dismiss()
+                    return
+                }
+                i -= 1
+            }
+            state.dismiss()
+        }
+
+        /// Replace `:prefix` immediately before the caret with the picked
+        /// emoji + a trailing space. Called both from keyboard commit
+        /// (Tab/Enter) and from clicking a popup row.
+        func commitAutocomplete(entry: EmojiCatalog.Entry) {
+            guard let tv = textView, let storage = tv.textStorage,
+                  let state = parent.autocompleteState, let prefix = state.prefix else { return }
+            let sel = tv.selectedRange()
+            let prefixLen = (prefix as NSString).length
+            let removeLen = prefixLen + 1  // +1 for the leading ":"
+            let removeRange = NSRange(location: sel.location - removeLen, length: removeLen)
+            guard removeRange.location >= 0 else { state.dismiss(); return }
+            let replacement = entry.emoji + " "
+            guard tv.shouldChangeText(in: removeRange, replacementString: replacement) else {
+                state.dismiss(); return
+            }
+            let attrs = tv.typingAttributes
+            storage.replaceCharacters(in: removeRange,
+                                       with: NSAttributedString(string: replacement, attributes: attrs))
+            tv.didChangeText()
+            let newCaret = removeRange.location + (replacement as NSString).length
+            tv.setSelectedRange(NSRange(location: newCaret, length: 0))
+            state.dismiss()
         }
 
         /// Slack-style typing autoformat. Fires on every text change; cheap
@@ -241,6 +299,28 @@ struct RichTextEditor: NSViewRepresentable {
         ///   * Return on a line that is exactly ```            → enter code-block mode
         ///   * Plain Return otherwise                          → send
         func textView(_ tv: NSTextView, doCommandBy selector: Selector) -> Bool {
+            // Autocomplete intercepts come FIRST — when the popup is open
+            // the arrow keys / Tab / Enter / Esc drive its selection
+            // rather than the editor.
+            if let state = parent.autocompleteState, state.isActive {
+                switch selector {
+                case #selector(NSResponder.moveDown(_:)):
+                    state.moveSelection(by: 1); return true
+                case #selector(NSResponder.moveUp(_:)):
+                    state.moveSelection(by: -1); return true
+                case #selector(NSResponder.insertTab(_:)),
+                     #selector(NSResponder.insertNewline(_:)):
+                    if let entry = state.matches[safe: state.selectedIndex] {
+                        commitAutocomplete(entry: entry)
+                    }
+                    return true
+                case #selector(NSResponder.cancelOperation(_:)):
+                    state.dismiss(); return true
+                default:
+                    break
+                }
+            }
+
             guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
             if NSEvent.modifierFlags.contains(.shift) { return false }
             if RichTextFormatting.isInsideCodeBlock(tv) {
@@ -263,6 +343,12 @@ struct RichTextEditor: NSViewRepresentable {
             let h = max(parent.minHeight, min(parent.maxHeight, used + inset))
             parent.onHeightChange(h)
         }
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }
 

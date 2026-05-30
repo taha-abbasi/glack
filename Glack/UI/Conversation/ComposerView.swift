@@ -19,6 +19,7 @@ struct ComposerView: View {
     @State private var emojiOpen: Bool = false
     @State private var pendingAttachments: [PendingAttachment] = []
     @State private var dragHighlighted: Bool = false
+    @State private var autocompleteState = EmojiAutocompleteState()
 
     private let minHeight: CGFloat = 22
     private let maxHeight: CGFloat = 160
@@ -54,6 +55,25 @@ struct ComposerView: View {
                     .stroke(dragHighlighted ? Color.accentColor : Color.gray.opacity(0.3),
                             lineWidth: dragHighlighted ? 1.5 : 0.5)
             )
+            .overlay(alignment: .topLeading) {
+                // Floating emoji autocomplete popup. Anchored to the top-left
+                // of the composer wrapper and offset upward so it sits ABOVE
+                // the composer like Slack's. Click → commit via the editor's
+                // commitAutocomplete path.
+                if autocompleteState.isActive {
+                    EmojiAutocompletePopup(state: autocompleteState) { entry in
+                        autocompleteState.selectedIndex = autocompleteState.matches.firstIndex { $0.id == entry.id } ?? 0
+                        // Commit via the editor — finds the underlying NSTextView
+                        // and replaces the `:prefix` with the emoji.
+                        if let tv = ComposerEditing.findEditor() {
+                            commitEmojiViaEditor(tv: tv, entry: entry)
+                        }
+                    }
+                    .offset(y: -popupOffset(for: autocompleteState.matches.count))
+                    .padding(.leading, 10)
+                    .transition(.opacity)
+                }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -136,7 +156,8 @@ struct ComposerView: View {
                 minHeight: minHeight,
                 maxHeight: maxHeight,
                 onSubmit: { Task { await send() } },
-                onHeightChange: { measuredHeight = $0 }
+                onHeightChange: { measuredHeight = $0 },
+                autocompleteState: autocompleteState
             )
             .disabled(isSending)
         }
@@ -147,6 +168,37 @@ struct ComposerView: View {
         let hasText = !attributedText.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasReadyAttachment = pendingAttachments.contains { if case .uploaded = $0.state { return true } else { return false } }
         return hasText || hasReadyAttachment
+    }
+
+    /// Pixel height of the autocomplete popup — varies with row count
+    /// (each row ~30pt + ~22pt footer + ~4pt padding).
+    private func popupOffset(for matchCount: Int) -> CGFloat {
+        let rowHeight: CGFloat = 30
+        let footer: CGFloat = 22
+        let padding: CGFloat = 8
+        return CGFloat(matchCount) * rowHeight + footer + padding
+    }
+
+    /// Click-to-commit pathway — locate the editor's NSTextView and call
+    /// into RichTextEditor.Coordinator's existing commit logic via a
+    /// direct replace. (Coordinator's commitAutocomplete is private to
+    /// itself; the duplicated logic here is small.)
+    private func commitEmojiViaEditor(tv: NSTextView, entry: EmojiCatalog.Entry) {
+        guard let storage = tv.textStorage, let prefix = autocompleteState.prefix else { return }
+        let sel = tv.selectedRange()
+        let removeLen = (prefix as NSString).length + 1
+        guard sel.location - removeLen >= 0 else { return }
+        let removeRange = NSRange(location: sel.location - removeLen, length: removeLen)
+        let replacement = entry.emoji + " "
+        guard tv.shouldChangeText(in: removeRange, replacementString: replacement) else { return }
+        let attrs = tv.typingAttributes
+        storage.replaceCharacters(in: removeRange,
+                                   with: NSAttributedString(string: replacement, attributes: attrs))
+        tv.didChangeText()
+        let newCaret = removeRange.location + (replacement as NSString).length
+        tv.setSelectedRange(NSRange(location: newCaret, length: 0))
+        autocompleteState.dismiss()
+        tv.window?.makeFirstResponder(tv)
     }
 
     // MARK: - File picking
