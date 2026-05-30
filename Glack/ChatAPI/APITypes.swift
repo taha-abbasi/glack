@@ -99,7 +99,25 @@ struct GReactionCreateBody: Encodable {
 struct GMessageCreateBody: Encodable {
     let text: String
     let thread: ThreadRef?
+    let attachment: [AttachmentRef]?
     struct ThreadRef: Encodable { let name: String }
+    struct AttachmentRef: Encodable {
+        let attachmentDataRef: AttachmentDataRef
+    }
+    struct AttachmentDataRef: Encodable {
+        let resourceName: String
+    }
+}
+
+/// Response from `attachments:upload`. The inner `resourceName` is what we
+/// echo back in `attachment[].attachmentDataRef.resourceName` on the
+/// subsequent messages.create call.
+struct GAttachmentUploadResponse: Decodable {
+    let attachmentDataRef: AttachmentDataRefResponse
+    struct AttachmentDataRefResponse: Decodable {
+        let resourceName: String?
+        let attachmentUploadToken: String?
+    }
 }
 
 struct GListMessagesResponse: Decodable {

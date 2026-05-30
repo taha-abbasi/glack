@@ -48,18 +48,77 @@ actor ChatAPIClient {
     }
 
     /// Send a plain-text message to a space, optionally as a reply in an
-    /// existing thread. `threadName` is the full `spaces/X/threads/T`
-    /// resource — when set, the request uses `messageReplyOption=
-    /// REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD` so the server attaches the
-    /// message to that thread (or starts a fresh one if it's gone).
-    func sendMessage(spaceID: String, text: String, threadName: String? = nil) async throws -> GMessage {
+    /// existing thread, optionally with one or more attachments. Each
+    /// attachment must already be uploaded via `uploadAttachment` so we
+    /// have its `resourceName`.
+    func sendMessage(spaceID: String, text: String,
+                     threadName: String? = nil,
+                     attachmentResourceNames: [String] = []) async throws -> GMessage {
         let url = ChatEndpoint.createMessage(spaceID: spaceID, threadReply: threadName != nil)
-        if let threadName {
-            let body = GMessageCreateBody(text: text, thread: .init(name: threadName))
-            return try await postJSON(url, body: body)
-        }
-        let body = ["text": text]
+        let body = GMessageCreateBody(
+            text: text,
+            thread: threadName.map { .init(name: $0) },
+            attachment: attachmentResourceNames.isEmpty ? nil : attachmentResourceNames.map {
+                .init(attachmentDataRef: .init(resourceName: $0))
+            }
+        )
         return try await postJSON(url, body: body)
+    }
+
+    /// Upload a file's raw bytes to a space and return the
+    /// `attachmentDataRef.resourceName` that `sendMessage` can attach.
+    /// The Chat API uses `uploadType=media` for a single-part raw upload
+    /// — Content-Type is the file MIME, body is the raw bytes.
+    func uploadAttachment(spaceID: String, fileURL: URL) async throws -> String {
+        let filename = fileURL.lastPathComponent
+        let mime = Self.mimeType(for: fileURL)
+        let data = try Data(contentsOf: fileURL)
+        let url = ChatEndpoint.uploadAttachment(spaceID: spaceID, filename: filename)
+        let token = try await Session.shared.accessToken()
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(mime, forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.httpBody = data
+        let (responseData, resp) = try await session.upload(for: req, from: data)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard 200..<300 ~= status else {
+            let body = String(data: responseData, encoding: .utf8) ?? ""
+            throw ChatAPIError.http(status: status, body: body)
+        }
+        let parsed = try decoder.decode(GAttachmentUploadResponse.self, from: responseData)
+        guard let resourceName = parsed.attachmentDataRef.resourceName else {
+            throw ChatAPIError.malformedResponse
+        }
+        return resourceName
+    }
+
+    /// Best-effort MIME from extension. Falls back to octet-stream.
+    private static func mimeType(for url: URL) -> String {
+        let ext = url.pathExtension.lowercased()
+        switch ext {
+        case "png":  return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif":  return "image/gif"
+        case "webp": return "image/webp"
+        case "heic", "heif": return "image/heic"
+        case "pdf":  return "application/pdf"
+        case "mp4":  return "video/mp4"
+        case "mov":  return "video/quicktime"
+        case "mp3":  return "audio/mpeg"
+        case "txt", "log", "md": return "text/plain"
+        case "json": return "application/json"
+        case "csv":  return "text/csv"
+        case "zip":  return "application/zip"
+        case "doc":  return "application/msword"
+        case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        case "xls":  return "application/vnd.ms-excel"
+        case "xlsx": return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        case "ppt":  return "application/vnd.ms-powerpoint"
+        case "pptx": return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        default:     return "application/octet-stream"
+        }
     }
 
     /// Edit a message you authored. Returns the patched GMessage with the

@@ -2,8 +2,25 @@ import Foundation
 
 enum ChatEndpoint {
     static let base = URL(string: "https://chat.googleapis.com/v1")!
+    /// Chat's media-upload host. Distinct from the regular API host — uploads
+    /// go through the `/upload/` path on a different load-balanced backend.
+    static let uploadBase = URL(string: "https://chat.googleapis.com/upload/v1")!
     static let peopleBase = URL(string: "https://people.googleapis.com/v1")!
     static let adminBase = URL(string: "https://admin.googleapis.com/admin/directory/v1")!
+
+    /// POST raw file bytes for upload to a space. Body is the file content,
+    /// `Content-Type` is the file MIME, `filename` is passed via query so the
+    /// returned attachmentDataRef knows the display name. Returns
+    /// `{ attachmentDataRef: { resourceName: "attachments/..." } }`.
+    static func uploadAttachment(spaceID: String, filename: String) -> URL {
+        var comps = URLComponents(url: uploadBase.appendingPathComponent("\(spaceID)/attachments:upload"),
+                                  resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "uploadType", value: "media"),
+            URLQueryItem(name: "filename", value: filename)
+        ]
+        return comps.url!
+    }
 
     static func listSpaces(pageToken: String? = nil, pageSize: Int = 1000) -> URL {
         var comps = URLComponents(url: base.appendingPathComponent("spaces"), resolvingAgainstBaseURL: false)!

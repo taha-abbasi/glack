@@ -162,13 +162,18 @@ final class Sync {
     }
 
     /// Send a plain-text message with optimistic local insert, optionally
-    /// as a reply in an existing thread. Writes a `pending-{uuid}` row
-    /// immediately so the UI updates without waiting on the network; on
-    /// success swaps it for the server's canonical row; on failure removes
-    /// the temp row and rethrows so the caller can restore the composer.
-    func sendMessage(spaceID: String, text: String, threadName: String? = nil) async throws {
+    /// as a reply in an existing thread and/or with attachments. Writes a
+    /// `pending-{uuid}` row immediately so the UI updates without waiting
+    /// on the network; on success swaps it for the server's canonical row;
+    /// on failure removes the temp row and rethrows so the caller can
+    /// restore the composer. `attachmentResourceNames` come from a prior
+    /// ChatAPIClient.uploadAttachment call.
+    func sendMessage(spaceID: String, text: String,
+                     threadName: String? = nil,
+                     attachmentResourceNames: [String] = []) async throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        // Allow attachment-only messages (no text), matching Chat web.
+        guard !trimmed.isEmpty || !attachmentResourceNames.isEmpty else { return }
         let tempID = "pending-\(UUID().uuidString)"
         let now = Date()
         let me = Session.shared.currentUserID
@@ -183,7 +188,7 @@ final class Sync {
             updatedAt: nil,
             threadId: threadName,
             deletedAt: nil,
-            attachmentCount: 0,
+            attachmentCount: attachmentResourceNames.count,
             rawJson: nil,
             reactionsJson: nil
         )
@@ -192,7 +197,11 @@ final class Sync {
             try r.insert(db)
         }
         do {
-            let server = try await ChatAPIClient.shared.sendMessage(spaceID: spaceID, text: text, threadName: threadName)
+            let server = try await ChatAPIClient.shared.sendMessage(
+                spaceID: spaceID, text: text,
+                threadName: threadName,
+                attachmentResourceNames: attachmentResourceNames
+            )
             try await Database.shared.write { db in
                 try MessageRecord.deleteOne(db, key: tempID)
                 var record = MessageRecord(
