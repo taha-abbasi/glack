@@ -19,9 +19,59 @@ enum MessageSearch {
         var id: String { messageID }
     }
 
-    static func search(_ rawQuery: String, limit: Int = 50) async -> [Result] {
+    enum Filter: String, CaseIterable, Identifiable {
+        case all = "All"
+        case fromMe = "From me"
+        case fromOthers = "From others"
+        case files = "Files"
+        case mentions = "Mentions"
+        var id: String { rawValue }
+        var systemImage: String {
+            switch self {
+            case .all:        return "magnifyingglass"
+            case .fromMe:     return "person.crop.circle"
+            case .fromOthers: return "person.2"
+            case .files:      return "paperclip"
+            case .mentions:   return "at"
+            }
+        }
+    }
+
+    static func search(_ rawQuery: String,
+                       filter: Filter = .all,
+                       currentUserID: String? = nil,
+                       limit: Int = 50) async -> [Result] {
         let query = sanitize(rawQuery)
         guard !query.isEmpty else { return [] }
+        // Build the WHERE-clause additions for the selected filter.
+        var extraWhere = ""
+        var extraArgs: [DatabaseValueConvertible] = []
+        switch filter {
+        case .all: break
+        case .fromMe:
+            if let me = currentUserID {
+                extraWhere = " AND m.senderId = ?"
+                extraArgs.append(me)
+            }
+        case .fromOthers:
+            if let me = currentUserID {
+                extraWhere = " AND (m.senderId IS NULL OR m.senderId != ?)"
+                extraArgs.append(me)
+            }
+        case .files:
+            extraWhere = " AND m.attachmentCount > 0"
+        case .mentions:
+            if let me = currentUserID {
+                // Chat encodes mentions as `<users/{id}>` in message.text.
+                let token = "<\(me)>"
+                extraWhere = " AND m.text LIKE ?"
+                extraArgs.append("%\(token)%")
+            }
+        }
+        // Snapshot to immutables. StatementArguments IS Sendable; the raw
+        // [DatabaseValueConvertible] array is not.
+        let whereClause = extraWhere
+        let statementArgs = StatementArguments([query] + extraArgs + [limit]) ?? StatementArguments()
         do {
             return try await Database.shared.read { db -> [Result] in
                 let sql = """
@@ -37,10 +87,11 @@ enum MessageSearch {
                     JOIN space s ON s.id = m.spaceId
                     WHERE message_fts MATCH ?
                       AND m.deletedAt IS NULL
+                      \(whereClause)
                     ORDER BY rank
                     LIMIT ?
                 """
-                return try Row.fetchAll(db, sql: sql, arguments: [query, limit]).compactMap { row in
+                return try Row.fetchAll(db, sql: sql, arguments: statementArgs).compactMap { row in
                     guard let id: String = row["messageID"],
                           let spaceID: String = row["spaceID"],
                           let createdAt: Date = row["createdAt"],

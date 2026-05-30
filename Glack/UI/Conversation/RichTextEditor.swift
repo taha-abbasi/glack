@@ -83,6 +83,9 @@ struct RichTextEditor: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: RichTextEditor
         weak var textView: NSTextView?
+        /// Guard against re-entrance — calling `didChangeText()` from an
+        /// autoformat path would otherwise trigger this notification again.
+        private var isAutoformatting = false
 
         init(_ parent: RichTextEditor) {
             self.parent = parent
@@ -92,6 +95,143 @@ struct RichTextEditor: NSViewRepresentable {
             guard let tv = textView else { return }
             parent.attributedText = NSAttributedString(attributedString: tv.attributedString())
             reportHeight()
+            if !isAutoformatting {
+                applyAutoformat(tv: tv)
+            }
+        }
+
+        /// Slack-style typing autoformat. Fires on every text change; cheap
+        /// (just checks the last character + walks back at most ~30 chars).
+        ///   `*foo* ` → **foo**           (bold)
+        ///   `_foo_ ` → _foo_             (italic)
+        ///   `~foo~ ` → ~foo~             (strikethrough)
+        ///   `` `foo` `` → `foo`           (inline code)
+        ///   `:smile:` → 😀                (emoji shortcode, no space needed)
+        /// Skips entirely inside code-block paragraphs (those markers stay
+        /// literal there).
+        private func applyAutoformat(tv: NSTextView) {
+            guard !RichTextFormatting.isInsideCodeBlock(tv) else { return }
+            guard let storage = tv.textStorage else { return }
+            let sel = tv.selectedRange()
+            guard sel.length == 0, sel.location >= 2, sel.location <= storage.length else { return }
+            let ns = storage.string as NSString
+            let justTyped = ns.substring(with: NSRange(location: sel.location - 1, length: 1))
+
+            isAutoformatting = true
+            defer { isAutoformatting = false }
+
+            switch justTyped {
+            case " ":
+                tryMarkerAutoformat(tv: tv, storage: storage, ns: ns, caretLocation: sel.location)
+            case ":":
+                tryEmojiAutoformat(tv: tv, storage: storage, ns: ns, caretLocation: sel.location)
+            default:
+                break
+            }
+        }
+
+        /// Detects `*X*`, `_X_`, `~X~`, `` `X` `` immediately before the
+        /// just-typed space. Wraps X with the corresponding attributes and
+        /// removes the markers.
+        private func tryMarkerAutoformat(tv: NSTextView, storage: NSTextStorage,
+                                         ns: NSString, caretLocation: Int) {
+            let closerLoc = caretLocation - 2  // char before the space
+            guard closerLoc >= 0 else { return }
+            let closer = ns.substring(with: NSRange(location: closerLoc, length: 1))
+
+            enum Marker { case bold, italic, strike, code }
+            let kind: Marker
+            switch closer {
+            case "*": kind = .bold
+            case "_": kind = .italic
+            case "~": kind = .strike
+            case "`": kind = .code
+            default: return
+            }
+
+            // Walk back to find the matching opening marker, bounded so we
+            // don't scan the whole document.
+            var i = closerLoc - 1
+            var openerLoc: Int? = nil
+            while i >= 0, (closerLoc - i) < 64 {
+                let c = ns.substring(with: NSRange(location: i, length: 1))
+                if c == closer { openerLoc = i; break }
+                if c == " " || c == "\n" || c == "\t" { return }
+                i -= 1
+            }
+            guard let opener = openerLoc, closerLoc - opener > 1 else { return }
+            let contentRange = NSRange(location: opener + 1, length: closerLoc - opener - 1)
+            let content = ns.substring(with: contentRange)
+            guard !content.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+
+            // Apply attributes
+            let baseFont = RichTextEditor.defaultFont
+            let codeFont = RichTextEditor.codeFont
+            let mgr = NSFontManager.shared
+            storage.beginEditing()
+            switch kind {
+            case .bold:
+                storage.enumerateAttribute(.font, in: contentRange, options: []) { val, sub, _ in
+                    let f = (val as? NSFont) ?? baseFont
+                    storage.addAttribute(.font, value: mgr.convert(f, toHaveTrait: .boldFontMask), range: sub)
+                }
+            case .italic:
+                storage.enumerateAttribute(.font, in: contentRange, options: []) { val, sub, _ in
+                    let f = (val as? NSFont) ?? baseFont
+                    storage.addAttribute(.font, value: mgr.convert(f, toHaveTrait: .italicFontMask), range: sub)
+                }
+            case .strike:
+                storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: contentRange)
+            case .code:
+                storage.addAttribute(.font, value: codeFont, range: contentRange)
+                storage.addAttribute(.backgroundColor, value: NSColor.gray.withAlphaComponent(0.18), range: contentRange)
+            }
+            // Delete markers — closer first so the opener's offset is still
+            // valid when we delete it.
+            storage.deleteCharacters(in: NSRange(location: closerLoc, length: 1))
+            storage.deleteCharacters(in: NSRange(location: opener, length: 1))
+            storage.endEditing()
+            tv.didChangeText()
+
+            // After removing two markers, the caret has shifted by -2.
+            tv.setSelectedRange(NSRange(location: caretLocation - 2, length: 0))
+            // Reset typing attrs so subsequent typing doesn't inherit the
+            // auto-applied style.
+            tv.typingAttributes = [.font: baseFont, .foregroundColor: NSColor.labelColor]
+        }
+
+        /// Detects `:name:` immediately before the caret and expands to the
+        /// matching Unicode emoji. Trigger is the just-typed closing colon
+        /// — no extra space needed. Looks up against the bundled
+        /// EmojiCatalog so any of the ~250 shortcodes work (`:smile:`,
+        /// `:thumbsup:`, `:tada:`, etc).
+        private func tryEmojiAutoformat(tv: NSTextView, storage: NSTextStorage,
+                                        ns: NSString, caretLocation: Int) {
+            let closingColonLoc = caretLocation - 1  // the colon we just typed
+            // Walk back to find the opening colon, bounded
+            var i = closingColonLoc - 1
+            var openingLoc: Int? = nil
+            while i >= 0, (closingColonLoc - i) < 32 {
+                let c = ns.substring(with: NSRange(location: i, length: 1))
+                if c == ":" { openingLoc = i; break }
+                if c == " " || c == "\n" || c == "\t" { return }
+                i -= 1
+            }
+            guard let opening = openingLoc, closingColonLoc - opening > 1 else { return }
+            let nameRange = NSRange(location: opening + 1, length: closingColonLoc - opening - 1)
+            let name = ns.substring(with: nameRange).lowercased()
+            // Lookup
+            let allEntries = EmojiCatalog.categories.flatMap(\.entries)
+            guard let entry = allEntries.first(where: { $0.name == name }) else { return }
+            // Replace :name: with the emoji
+            let fullRange = NSRange(location: opening, length: (closingColonLoc - opening) + 1)
+            let replacement = NSAttributedString(string: entry.emoji, attributes: tv.typingAttributes)
+            storage.beginEditing()
+            storage.replaceCharacters(in: fullRange, with: replacement)
+            storage.endEditing()
+            tv.didChangeText()
+            let newCaret = opening + (entry.emoji as NSString).length
+            tv.setSelectedRange(NSRange(location: newCaret, length: 0))
         }
 
         /// Intercept the Return key:

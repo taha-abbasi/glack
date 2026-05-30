@@ -1,8 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// ⌘F local search over the cached message store. Type to query (debounced
-/// ~120ms), arrow keys to navigate, Enter to jump to the message's space.
+/// ⌘F local search over the cached message store. Slack-style layout:
+/// search field + filter chip row + avatar-rich result cards. Type to
+/// query (debounced ~120ms), arrow keys to navigate, Enter to jump.
 struct SearchView: View {
     @Bindable var usersObserver: UsersObserver
     @Bindable var spacesObserver: SpacesObserver
@@ -12,6 +13,7 @@ struct SearchView: View {
     @Binding var isPresented: Bool
 
     @State private var query: String = ""
+    @State private var filter: MessageSearch.Filter = .all
     @State private var results: [MessageSearch.Result] = []
     @State private var highlightedIndex: Int = 0
     @State private var searchTask: Task<Void, Never>?
@@ -22,19 +24,23 @@ struct SearchView: View {
         VStack(spacing: 0) {
             searchField
             Divider()
+            filterRow
+            Divider().opacity(0.4)
             resultsBody
         }
-        .frame(width: 620, height: 480)
+        .frame(width: 700, height: 540)
         .background(.regularMaterial)
         .onAppear { fieldFocused = true }
-        .onChange(of: query) { _, new in
-            scheduleSearch(new)
-        }
+        .onChange(of: query) { _, new in scheduleSearch(new, filter: filter) }
+        .onChange(of: filter) { _, new in scheduleSearch(query, filter: new) }
     }
+
+    // MARK: - Search input
 
     private var searchField: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
+                .font(.system(size: 13))
                 .foregroundStyle(.secondary)
             TextField("Search messages…", text: $query)
                 .textFieldStyle(.plain)
@@ -65,16 +71,65 @@ struct SearchView: View {
         .padding(.vertical, 14)
     }
 
+    // MARK: - Filter chips
+
+    private var filterRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(MessageSearch.Filter.allCases) { f in
+                    filterChip(f)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private func filterChip(_ f: MessageSearch.Filter) -> some View {
+        let isActive = filter == f
+        return Button {
+            filter = f
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: f.systemImage)
+                    .font(.system(size: 11, weight: .medium))
+                Text(f.rawValue)
+                    .font(.system(size: 12, weight: isActive ? .semibold : .regular))
+            }
+            .foregroundStyle(isActive ? Color.white : Color.primary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(
+                Capsule().fill(isActive ? Color.accentColor : Color.primary.opacity(0.08))
+            )
+        }
+        .buttonStyle(.plain)
+        .help(f.rawValue)
+    }
+
+    // MARK: - Results
+
     @ViewBuilder
     private var resultsBody: some View {
         if query.trimmingCharacters(in: .whitespaces).isEmpty {
-            emptyHint("Search local message history", "Type to search across every space, DM, and thread synced to this device.")
+            emptyHint("Search local message history",
+                      "Type to search across every space, DM, and thread synced to this device.")
         } else if results.isEmpty && !lastSearchedQuery.isEmpty {
-            emptyHint("No matches", "Try a shorter or different term.")
+            emptyHint("No matches", "Try a shorter or different term, or change the filter.")
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
+                        if !results.isEmpty {
+                            HStack {
+                                Text("\(results.count) message\(results.count == 1 ? "" : "s")")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                        }
                         ForEach(Array(results.enumerated()), id: \.element.id) { idx, result in
                             row(for: result, isHighlighted: idx == highlightedIndex)
                                 .id(result.id)
@@ -88,7 +143,7 @@ struct SearchView: View {
                                 }
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.bottom, 4)
                 }
                 .onChange(of: highlightedIndex) { _, new in
                     if let id = results[safe: new]?.id {
@@ -100,25 +155,48 @@ struct SearchView: View {
     }
 
     private func row(for result: MessageSearch.Result, isHighlighted: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(senderName(for: result))
-                    .font(.system(size: 13, weight: .semibold))
-                Text("·").foregroundStyle(.tertiary)
-                Text(spaceName(for: result))
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                Text(timeString(result.createdAt))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+        HStack(alignment: .top, spacing: 10) {
+            CachedAvatar(url: usersObserver.photoURL(for: result.senderID)) {
+                Circle()
+                    .fill(Color.secondary.opacity(0.18))
+                    .overlay(
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    )
             }
-            Text(highlightedSnippet(result.snippet))
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
+            .frame(width: 32, height: 32)
+            .clipShape(Circle())
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(senderName(for: result))
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("in").font(.system(size: 11)).foregroundStyle(.tertiary)
+                    Text(spaceName(for: result))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text(timeString(result.createdAt))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
+                Text(highlightedSnippet(result.snippet))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.primary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                if isHighlighted {
+                    HStack(spacing: 4) {
+                        Image(systemName: "return")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text("Jump to message")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundStyle(.secondary)
+                }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -142,7 +220,7 @@ struct SearchView: View {
 
     // MARK: - Helpers
 
-    private func scheduleSearch(_ q: String) {
+    private func scheduleSearch(_ q: String, filter: MessageSearch.Filter) {
         searchTask?.cancel()
         let trimmed = q.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty {
@@ -151,16 +229,16 @@ struct SearchView: View {
             lastSearchedQuery = ""
             return
         }
+        let captured = trimmed
         searchTask = Task {
-            // Debounce so we don't query on every keystroke.
             try? await Task.sleep(nanoseconds: 120_000_000)
             if Task.isCancelled { return }
-            let hits = await MessageSearch.search(trimmed)
+            let hits = await MessageSearch.search(captured, filter: filter, currentUserID: currentUserID)
             if Task.isCancelled { return }
             await MainActor.run {
                 self.results = hits
                 self.highlightedIndex = 0
-                self.lastSearchedQuery = trimmed
+                self.lastSearchedQuery = captured
             }
         }
     }
@@ -196,13 +274,10 @@ struct SearchView: View {
         return f.localizedString(for: date, relativeTo: Date())
     }
 
-    /// Parse the SQLite snippet (with our custom «BEGIN»/«END» tokens) into
-    /// an AttributedString with bold runs for each match.
     private func highlightedSnippet(_ raw: String) -> AttributedString {
         var out = AttributedString("")
         var remaining = raw[...]
         while let beginRange = remaining.range(of: "«BEGIN»") {
-            // The plain prefix before the match
             let prefix = String(remaining[..<beginRange.lowerBound])
             out.append(AttributedString(prefix))
             let afterBegin = remaining[beginRange.upperBound...]
@@ -214,6 +289,7 @@ struct SearchView: View {
             var bold = AttributedString(matched)
             bold.font = .system(size: 12, weight: .semibold)
             bold.foregroundColor = .primary
+            bold.backgroundColor = Color.yellow.opacity(0.35)
             out.append(bold)
             remaining = afterBegin[endRange.upperBound...]
         }
