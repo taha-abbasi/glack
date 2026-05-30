@@ -63,6 +63,16 @@ struct RichTextEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        // Critical: refresh the Coordinator's captured parent on every
+        // update so its `onSubmit` / `onHeightChange` / `autocompleteState`
+        // closures point at the latest ComposerView struct. Without this,
+        // switching spaces (or threads, or any owning view re-create) leaves
+        // the Coordinator holding the ORIGINAL parent — Enter would route
+        // sends to whichever spaceID was open when the view first rendered,
+        // not the currently visible one. (Same class of bug as the sticky-
+        // thread `.id(threadID)` fix, but on the NSViewRepresentable side.)
+        context.coordinator.parent = self
+
         guard let textView = scrollView.documentView as? NSTextView else { return }
         // Only push attributedText INTO the view when an external setter
         // (send/clear/restore) actually changed it. Otherwise we'd clobber
