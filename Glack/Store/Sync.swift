@@ -185,15 +185,18 @@ final class Sync {
                 }
             }
 
-            // Persist progress.
+            // Persist progress. Snapshot the mutable vars into immutables
+            // first — Swift 6 won't let mutable vars cross into the Sendable
+            // DB write closure.
+            let didHitEnd = hitEnd
+            let finalOldest = oldestSeen
             try? await Database.shared.write { db in
-                if hitEnd {
+                if didHitEnd {
                     try db.execute(
                         sql: "UPDATE space SET backfillCompleteAt = ?, backfillOldestSeenId = COALESCE(backfillOldestSeenId, 'done') WHERE id = ?",
                         arguments: [Date(), spaceID]
                     )
-                } else if let oldest = oldestSeen {
-                    // Mark progress so we can show this in diagnostics if needed.
+                } else if let oldest = finalOldest {
                     try db.execute(
                         sql: "UPDATE space SET backfillOldestSeenId = ? WHERE id = ?",
                         arguments: [ISO8601DateFormatter().string(from: oldest), spaceID]
