@@ -135,15 +135,47 @@ final class SectionsObserver {
         task?.cancel()
         let observation = ValueObservation.tracking { db -> [SectionGroup] in
             let sections = try SectionRecord.order(SectionRecord.Columns.sortOrder).fetchAll(db)
+
+            // Build a per-system-type bucket of orphans — spaces that exist
+            // in the local cache but aren't claimed by any section_item row.
+            // Chat's sections API doesn't cover every space (Daily Standup
+            // auto-spaces, freshly-joined rooms before the section sync runs,
+            // etc.) so without this they'd never render. Bucket by what we
+            // think the system section SHOULD be based on the space's type.
+            let orphans = try SpaceRecord.fetchAll(db, sql: """
+                SELECT space.*
+                FROM space
+                LEFT JOIN section_item ON section_item.spaceId = space.id
+                WHERE section_item.spaceId IS NULL
+            """)
+            var orphansBySystemType: [String: [SpaceRecord]] = [:]
+            for s in orphans {
+                let key: String
+                if s.singleUserBotDm == true {
+                    key = "DEFAULT_APPS"
+                } else {
+                    switch s.type {
+                    case .directMessage, .groupChat: key = "DEFAULT_DIRECT_MESSAGES"
+                    case .space, .unknown:           key = "DEFAULT_SPACES"
+                    }
+                }
+                orphansBySystemType[key, default: []].append(s)
+            }
+
             var out: [SectionGroup] = []
             for section in sections {
-                let spaces = try SpaceRecord.fetchAll(db, sql: """
+                var spaces = try SpaceRecord.fetchAll(db, sql: """
                     SELECT space.*
                     FROM space
                     JOIN section_item ON section_item.spaceId = space.id
                     WHERE section_item.sectionId = ?
                     ORDER BY section_item.sortOrder ASC
                 """, arguments: [section.id])
+                // Append orphans whose default system section matches this row.
+                if let key = section.systemSectionType,
+                   let extras = orphansBySystemType[key] {
+                    spaces.append(contentsOf: extras)
+                }
                 out.append(SectionGroup(section: section, spaces: spaces))
             }
             return out
