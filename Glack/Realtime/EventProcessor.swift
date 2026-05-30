@@ -67,14 +67,18 @@ enum EventProcessor {
         let viewing = await MainActor.run { Session.shared.currentlyViewingSpaceID }
         let isFromOthers = m.sender?.name != nil && m.sender?.name != me && spaceID != viewing
 
-        try await Database.shared.write { db in
-            // If the API already says this message was deleted server-side
-            // (unusual on create/update, defensive on update redeliveries)
-            // strip it locally to match.
+        // Gate the unread bump on whether this is a genuine INSERT vs an
+        // upsert of an already-known row. Without this, Pub/Sub's at-least-
+        // once redelivery semantics would double-count the same message —
+        // a slow ack triggers redelivery, EventProcessor runs again,
+        // unreadCount creeps up forever.
+        let wasNewInsert: Bool = try await Database.shared.write { db -> Bool in
+            // Deleted server-side → drop locally and stop.
             if APIDate.parse(m.deleteTime) != nil {
                 try MessageRecord.deleteOne(db, key: m.name)
-                return
+                return false
             }
+            let existed = try MessageRecord.fetchOne(db, key: m.name) != nil
             var record = MessageRecord(
                 id: m.name,
                 spaceId: spaceID,
@@ -98,14 +102,15 @@ enum EventProcessor {
                     arguments: [createdAt, spaceID]
                 )
             }
-            if isFromOthers {
+            if !existed && isFromOthers {
                 try db.execute(
                     sql: "UPDATE space SET unreadCount = unreadCount + 1 WHERE id = ?",
                     arguments: [spaceID]
                 )
             }
+            return !existed
         }
-        if isFromOthers {
+        if wasNewInsert && isFromOthers {
             await postArrivalNotification(message: m, spaceID: spaceID)
         }
     }
