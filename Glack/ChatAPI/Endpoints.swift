@@ -23,9 +23,18 @@ enum ChatEndpoint {
     }
 
     static func listSpaces(pageToken: String? = nil, pageSize: Int = 1000) -> URL {
+        // Explicitly request ALL three space types. The Chat API's default
+        // behavior for `spaces.list` (no filter) is inconsistent: docs say
+        // it returns SPACE + GROUP_CHAT, empirically it sometimes returns
+        // just SPACE + DIRECT_MESSAGE, etc. Spelling out the filter
+        // guarantees group DMs (the kind Meet auto-creates for meetings)
+        // show up alongside named spaces and 1:1 DMs.
         var comps = URLComponents(url: base.appendingPathComponent("spaces"), resolvingAgainstBaseURL: false)!
         var items: [URLQueryItem] = [
             URLQueryItem(name: "pageSize", value: String(pageSize)),
+            URLQueryItem(name: "filter", value:
+                "spaceType = \"SPACE\" OR spaceType = \"DIRECT_MESSAGE\" OR spaceType = \"GROUP_CHAT\""
+            ),
         ]
         if let pageToken { items.append(URLQueryItem(name: "pageToken", value: pageToken)) }
         comps.queryItems = items
