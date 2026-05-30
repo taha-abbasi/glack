@@ -175,6 +175,13 @@ struct MessageRow: View {
                 } label: {
                     Label("Copy link to message", systemImage: "link")
                 }
+                Button {
+                    if let url = URL(string: chatWebLink) {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    Label("Open in Chat web", systemImage: "arrow.up.forward.app")
+                }
                 if isOwnMessage {
                     Divider()
                     Button {
