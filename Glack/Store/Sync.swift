@@ -391,13 +391,70 @@ final class Sync {
     }
 
     /// Clear unread state on a space. Called from the UI when the user opens
-    /// the conversation.
+    /// the conversation. Also propagates the read state to Chat so other
+    /// clients (mobile, web) stop bolding the space.
     func markRead(spaceID: String) async {
+        let now = Date()
         try? await Database.shared.write { db in
             try db.execute(
                 sql: "UPDATE space SET unreadCount = 0, lastReadAt = ? WHERE id = ?",
-                arguments: [Date(), spaceID]
+                arguments: [now, spaceID]
             )
+        }
+        // Fire-and-forget — local DB is the source of truth, the server
+        // call is for cross-device convergence and shouldn't block the UI
+        // or fail the local clear if the network's down.
+        do {
+            try await ChatAPIClient.shared.updateSpaceReadState(spaceID: spaceID, lastReadTime: now)
+        } catch {
+            Log.sync.error("updateSpaceReadState(\(spaceID, privacy: .public)) failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Edit a message you authored. Optimistic local update with rollback
+    /// on API failure. The Chat backend will fire a message.updated event
+    /// so other clients reconverge, and our realtime pull loop will pick
+    /// the same event up — both paths upsert the same row.
+    func editMessage(messageName: String, newText: String) async throws {
+        let original: String? = try await Database.shared.read { db in
+            try String.fetchOne(db,
+                                sql: "SELECT text FROM message WHERE id = ?",
+                                arguments: [messageName])
+        }
+        // Optimistic write
+        try await Database.shared.write { db in
+            try db.execute(
+                sql: "UPDATE message SET text = ?, textPlain = ?, updatedAt = ? WHERE id = ?",
+                arguments: [newText, newText, Date(), messageName]
+            )
+        }
+        do {
+            let server = try await ChatAPIClient.shared.editMessage(messageName: messageName, text: newText)
+            // Re-canonicalize from server response so any server-side
+            // normalization (link previews, mention resolution, etc.) lands.
+            try await Database.shared.write { db in
+                try db.execute(
+                    sql: "UPDATE message SET text = ?, textPlain = ?, updatedAt = ? WHERE id = ?",
+                    arguments: [
+                        server.text ?? server.argumentText ?? server.formattedText ?? newText,
+                        Self.plainText(from: server),
+                        APIDate.parse(server.lastUpdateTime) ?? Date(),
+                        messageName
+                    ]
+                )
+            }
+            Log.sync.info("editMessage \(messageName, privacy: .public) ok")
+        } catch {
+            // Restore the original text so the user doesn't lose a message
+            // body they thought they kept.
+            try? await Database.shared.write { db in
+                try db.execute(
+                    sql: "UPDATE message SET text = ?, textPlain = ?, updatedAt = NULL WHERE id = ?",
+                    arguments: [original, original, messageName]
+                )
+            }
+            Log.sync.error("editMessage \(messageName, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            throw error
         }
     }
 

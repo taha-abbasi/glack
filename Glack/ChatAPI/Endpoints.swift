@@ -31,6 +31,16 @@ enum ChatEndpoint {
         return comps.url!
     }
 
+    /// PATCH a message you authored. `updateMask` controls which fields are
+    /// patched — we use `text` for edit. Without the mask the API ignores
+    /// the body and returns 400.
+    static func patchMessage(messageName: String, updateMask: String = "text") -> URL {
+        var comps = URLComponents(url: base.appendingPathComponent(messageName),
+                                  resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "updateMask", value: updateMask)]
+        return comps.url!
+    }
+
     /// POST a new message to a space. When `threadReply` is true, the URL
     /// carries `messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD` so
     /// the message attaches to the thread named in the request body — Chat
@@ -73,6 +83,16 @@ enum ChatEndpoint {
 
     static func spaceReadState(spaceID: String, currentUser: String = "users/me") -> URL {
         base.appendingPathComponent("\(currentUser)/spaces/\(spaceID.replacingOccurrences(of: "spaces/", with: ""))/spaceReadState")
+    }
+
+    /// PATCH variant of spaceReadState — Chat requires `updateMask=lastReadTime`
+    /// or it ignores the body and returns 400. Used to propagate "I've read
+    /// this space" to mobile + web so they stop bolding it.
+    static func spaceReadStateUpdate(spaceID: String, currentUser: String = "users/me") -> URL {
+        var comps = URLComponents(url: spaceReadState(spaceID: spaceID, currentUser: currentUser),
+                                  resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "updateMask", value: "lastReadTime")]
+        return comps.url!
     }
 
     /// List the signed-in user's sidebar sections (system + custom).

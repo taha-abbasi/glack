@@ -17,6 +17,10 @@ struct MessageRow: View {
     @State private var pickerOpen: Bool = false
     @State private var showDeleteConfirm: Bool = false
     @State private var deleteError: String?
+    @State private var isEditing: Bool = false
+    @State private var editDraft: String = ""
+    @State private var editError: String?
+    @FocusState private var editFocused: Bool
 
     private var isOwnMessage: Bool {
         guard let me = Session.shared.currentUserID, let sid = message.senderId else { return false }
@@ -37,6 +41,15 @@ struct MessageRow: View {
         rowHovering || toolbarHovering || pickerOpen || showDeleteConfirm || deleteError != nil
     }
 
+    /// Deep link to this message in Chat web — used by the "Copy link"
+    /// menu item. Format: `https://chat.google.com/room/{spaceId}/{messageId}`
+    /// matches what Chat web's "Copy link" produces.
+    private var chatWebLink: String {
+        let spaceID = message.spaceId.replacingOccurrences(of: "spaces/", with: "")
+        let messageBase = message.id.replacingOccurrences(of: "spaces/\(spaceID)/messages/", with: "")
+        return "https://chat.google.com/room/\(spaceID)/\(messageBase)"
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             avatar
@@ -48,9 +61,18 @@ struct MessageRow: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
-                Text(renderedBody)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                if isEditing {
+                    editEditor
+                } else {
+                    Text(renderedBody)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let _ = message.updatedAt {
+                        Text("(edited)")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
                 if message.attachmentCount > 0 {
                     Label("\(message.attachmentCount) attachment\(message.attachmentCount == 1 ? "" : "s")",
                           systemImage: "paperclip")
@@ -134,7 +156,7 @@ struct MessageRow: View {
                 .help("Reply in thread")
             }
 
-            // Overflow menu — Copy text always; Delete on own messages only.
+            // Overflow menu — Copy text + Copy link always; Edit + Delete on own messages only.
             Divider().frame(height: 16)
             Menu {
                 Button {
@@ -144,8 +166,20 @@ struct MessageRow: View {
                 } label: {
                     Label("Copy message text", systemImage: "doc.on.doc")
                 }
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(chatWebLink, forType: .string)
+                } label: {
+                    Label("Copy link to message", systemImage: "link")
+                }
                 if isOwnMessage {
                     Divider()
+                    Button {
+                        editDraft = message.text ?? message.textPlain ?? ""
+                        isEditing = true
+                    } label: {
+                        Label("Edit message", systemImage: "pencil")
+                    }
                     Button(role: .destructive) {
                         showDeleteConfirm = true
                     } label: {
@@ -256,6 +290,80 @@ struct MessageRow: View {
         let first = parts.first?.first.map(String.init) ?? "?"
         let last = parts.dropFirst().first?.first.map(String.init) ?? ""
         return (first + last).uppercased()
+    }
+
+    /// Inline editor that replaces the message text when the user picks
+    /// Edit from the ⋯ menu. Enter saves, Esc cancels, Shift+Enter inserts
+    /// a newline — matches Slack's edit affordance. Uses SwiftUI TextField
+    /// (axis: .vertical) rather than the rich RichTextEditor to keep the
+    /// edit small and lightweight.
+    @ViewBuilder
+    private var editEditor: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            TextField("Edit message", text: $editDraft, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .lineLimit(1...8)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.primary.opacity(0.05))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.accentColor.opacity(0.5), lineWidth: 1)
+                )
+                .focused($editFocused)
+                .onKeyPress(keys: [.return]) { press in
+                    if press.modifiers.contains(.shift) { return .ignored }
+                    Task { await commitEdit() }
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    cancelEdit()
+                    return .handled
+                }
+                .onAppear { editFocused = true }
+            HStack(spacing: 8) {
+                Text("Esc to cancel · Return to save")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button("Cancel") { cancelEdit() }
+                    .controlSize(.small)
+                Button("Save") {
+                    Task { await commitEdit() }
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .disabled(editDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          || editDraft == (message.text ?? ""))
+            }
+            if let err = editError {
+                Text(err).font(.system(size: 11)).foregroundStyle(.red)
+            }
+        }
+    }
+
+    private func commitEdit() async {
+        let newText = editDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !newText.isEmpty, newText != (message.text ?? "") else {
+            cancelEdit()
+            return
+        }
+        editError = nil
+        do {
+            try await Sync.shared.editMessage(messageName: message.id, newText: newText)
+            isEditing = false
+        } catch {
+            editError = "Couldn't save: \(error.localizedDescription)"
+        }
+    }
+
+    private func cancelEdit() {
+        isEditing = false
+        editDraft = ""
+        editError = nil
     }
 
     /// "View thread · N replies" link, shown when this row's thread has

@@ -62,6 +62,24 @@ actor ChatAPIClient {
         return try await postJSON(url, body: body)
     }
 
+    /// Edit a message you authored. Returns the patched GMessage with the
+    /// updated text + lastUpdateTime.
+    func editMessage(messageName: String, text: String) async throws -> GMessage {
+        let url = ChatEndpoint.patchMessage(messageName: messageName, updateMask: "text")
+        let body = ["text": text]
+        return try await patchJSON(url, body: body)
+    }
+
+    /// Update the user's read state on a space — propagates the
+    /// "I have read up to T" timestamp to Chat so other clients (mobile,
+    /// web) stop bolding the space + bumping its unread badge.
+    func updateSpaceReadState(spaceID: String, lastReadTime: Date) async throws {
+        let url = ChatEndpoint.spaceReadStateUpdate(spaceID: spaceID)
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let body = ["lastReadTime": f.string(from: lastReadTime)]
+        let _: GSpaceReadState = try await patchJSON(url, body: body)
+    }
+
     /// Delete a message you authored. Pass `force: true` to also delete the
     /// thread replies (Chat returns 400 otherwise when the message has any).
     func deleteMessage(messageName: String, force: Bool = false) async throws {
@@ -216,6 +234,24 @@ actor ChatAPIClient {
         } catch {
             throw ChatAPIError.malformedResponse
         }
+    }
+
+    private func patchJSON<B: Encodable, T: Decodable>(_ url: URL, body: B) async throws -> T {
+        let token = try await Session.shared.accessToken()
+        var req = URLRequest(url: url)
+        req.httpMethod = "PATCH"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(body)
+        let (data, resp) = try await session.data(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard 200..<300 ~= status else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ChatAPIError.http(status: status, body: body)
+        }
+        do { return try decoder.decode(T.self, from: data) }
+        catch { throw ChatAPIError.malformedResponse }
     }
 
     private func postJSON<B: Encodable, T: Decodable>(_ url: URL, body: B) async throws -> T {
