@@ -47,10 +47,13 @@ struct GThread: Decodable {
     let name: String?         // "spaces/X/threads/Y"
 }
 
-struct GAttachment: Decodable {
+struct GAttachment: Codable, Hashable {
     let name: String?
     let contentName: String?
     let contentType: String?
+    let source: String?
+    let downloadUri: String?
+    let thumbnailUri: String?
 }
 
 struct GMessage: Decodable {

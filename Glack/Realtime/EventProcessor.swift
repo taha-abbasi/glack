@@ -88,7 +88,8 @@ enum EventProcessor {
                 deletedAt: nil,
                 attachmentCount: m.attachment?.count ?? 0,
                 rawJson: nil,
-                reactionsJson: Sync.encodeReactions(m.emojiReactionSummaries)
+                reactionsJson: Sync.encodeReactions(m.emojiReactionSummaries),
+                attachmentsJson: Sync.encodeAttachments(m.attachment)
             )
             try record.save(db)
             if let createdAt = APIDate.parse(m.createTime) {

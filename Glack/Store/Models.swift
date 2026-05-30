@@ -62,6 +62,7 @@ struct MessageRecord: Codable, FetchableRecord, MutablePersistableRecord, Identi
     var attachmentCount: Int
     var rawJson: String?
     var reactionsJson: String?
+    var attachmentsJson: String?
 
     enum Columns {
         static let id = Column(CodingKeys.id)
@@ -79,6 +80,13 @@ struct MessageRecord: Codable, FetchableRecord, MutablePersistableRecord, Identi
         guard let json = reactionsJson, !json.isEmpty,
               let data = json.data(using: .utf8) else { return [] }
         return (try? JSONDecoder().decode([GEmojiReactionSummary].self, from: data)) ?? []
+    }
+
+    /// Decoded attachment list. Same lazy/safe pattern as reactions.
+    var attachments: [GAttachment] {
+        guard let json = attachmentsJson, !json.isEmpty,
+              let data = json.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([GAttachment].self, from: data)) ?? []
     }
 
     /// True for the parent message of a thread, OR for any message that isn't

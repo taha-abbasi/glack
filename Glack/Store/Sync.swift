@@ -167,7 +167,8 @@ final class Sync {
                             deletedAt: nil,
                             attachmentCount: m.attachment?.count ?? 0,
                             rawJson: nil,
-                            reactionsJson: Self.encodeReactions(m.emojiReactionSummaries)
+                            reactionsJson: Self.encodeReactions(m.emojiReactionSummaries),
+                            attachmentsJson: Self.encodeAttachments(m.attachment)
                         )
                         try record.save(db)
                     }
@@ -268,6 +269,13 @@ final class Sync {
         }
     }
 
+    nonisolated static func encodeAttachments(_ attachments: [GAttachment]?) -> String? {
+        guard let a = attachments, !a.isEmpty,
+              let data = try? JSONEncoder().encode(a),
+              let s = String(data: data, encoding: .utf8) else { return nil }
+        return s
+    }
+
     nonisolated static func encodeReactions(_ summaries: [GEmojiReactionSummary]?) -> String? {
         guard let s = summaries, !s.isEmpty,
               let data = try? JSONEncoder().encode(s),
@@ -304,7 +312,8 @@ final class Sync {
             deletedAt: nil,
             attachmentCount: attachmentResourceNames.count,
             rawJson: nil,
-            reactionsJson: nil
+            reactionsJson: nil,
+            attachmentsJson: nil
         )
         try await Database.shared.write { db in
             var r = optimistic
@@ -331,7 +340,8 @@ final class Sync {
                     deletedAt: APIDate.parse(server.deleteTime),
                     attachmentCount: server.attachment?.count ?? 0,
                     rawJson: nil,
-                    reactionsJson: Self.encodeReactions(server.emojiReactionSummaries)
+                    reactionsJson: Self.encodeReactions(server.emojiReactionSummaries),
+                    attachmentsJson: Self.encodeAttachments(server.attachment)
                 )
                 try record.save(db)
             }
@@ -438,7 +448,8 @@ final class Sync {
                         deletedAt: nil,
                         attachmentCount: m.attachment?.count ?? 0,
                         rawJson: nil,
-                        reactionsJson: Self.encodeReactions(m.emojiReactionSummaries)
+                        reactionsJson: Self.encodeReactions(m.emojiReactionSummaries),
+                        attachmentsJson: Self.encodeAttachments(m.attachment)
                     )
                     try record.save(db)
                     if isNew {

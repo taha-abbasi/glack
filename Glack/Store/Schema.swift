@@ -137,6 +137,15 @@ enum Schema {
             }
         }
 
+        m.registerMigration("v6-message-attachments") { db in
+            try db.alter(table: "message") { t in
+                // JSON-encoded [GAttachment] — same pattern as reactionsJson.
+                // Includes contentName, contentType, source, etc. so we can
+                // render incoming attachment cards without an extra round-trip.
+                t.add(column: "attachmentsJson", .text)
+            }
+        }
+
         return m
     }
 }

@@ -73,7 +73,10 @@ struct MessageRow: View {
                             .foregroundStyle(.tertiary)
                     }
                 }
-                if message.attachmentCount > 0 {
+                if !message.attachments.isEmpty {
+                    attachmentCards
+                } else if message.attachmentCount > 0 {
+                    // Pre-v6 row (no JSON detail stored) — show the count as a fallback.
                     Label("\(message.attachmentCount) attachment\(message.attachmentCount == 1 ? "" : "s")",
                           systemImage: "paperclip")
                         .font(.system(size: 11))
@@ -290,6 +293,73 @@ struct MessageRow: View {
         let first = parts.first?.first.map(String.init) ?? "?"
         let last = parts.dropFirst().first?.first.map(String.init) ?? ""
         return (first + last).uppercased()
+    }
+
+    /// Cards for each attachment on an incoming message. Click → opens the
+    /// message in Chat web (the only way to actually fetch the bytes today;
+    /// `media.download` would require building a fetch flow we haven't yet).
+    @ViewBuilder
+    private var attachmentCards: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(message.attachments.enumerated()), id: \.offset) { _, att in
+                Button {
+                    if let url = URL(string: chatWebLink) {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: attachmentIcon(for: att))
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 22)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(att.contentName ?? att.name ?? "Attachment")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            if let type = att.contentType, !type.isEmpty {
+                                Text(type)
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "arrow.up.forward.app")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.primary.opacity(0.05))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.gray.opacity(0.25), lineWidth: 0.5)
+                    )
+                }
+                .buttonStyle(.plain)
+                .help("Open in Chat web")
+            }
+        }
+        .frame(maxWidth: 360, alignment: .leading)
+        .padding(.top, 2)
+    }
+
+    private func attachmentIcon(for att: GAttachment) -> String {
+        guard let type = att.contentType?.lowercased() else { return "doc" }
+        if type.hasPrefix("image/") { return "photo" }
+        if type.hasPrefix("video/") { return "video" }
+        if type.hasPrefix("audio/") { return "waveform" }
+        if type.contains("pdf") { return "doc.richtext" }
+        if type.contains("zip") || type.contains("compressed") { return "doc.zipper" }
+        if type.contains("spreadsheet") || type.contains("excel") { return "tablecells" }
+        if type.contains("word") || type.contains("document") { return "doc.text" }
+        if type.contains("presentation") || type.contains("powerpoint") { return "rectangle.on.rectangle" }
+        return "doc"
     }
 
     /// Inline editor that replaces the message text when the user picks
