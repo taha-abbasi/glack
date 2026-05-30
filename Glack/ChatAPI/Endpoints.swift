@@ -72,10 +72,11 @@ enum ChatEndpoint {
         return comps.url!
     }
 
-    static func listMessages(spaceID: String, pageToken: String? = nil, pageSize: Int = 100, orderBy: String = "createTime desc") -> URL {
+    static func listMessages(spaceID: String, pageToken: String? = nil, pageSize: Int = 100, orderBy: String = "createTime desc", filter: String? = nil) -> URL {
         // spaceID is "spaces/AAAAAAAAAA". showDeleted=true so we receive
         // tombstones for deletes that happened server-side and can drop
-        // the corresponding local rows.
+        // the corresponding local rows. `filter` is a CEL expression
+        // accepted by the Chat API — e.g. `createTime < "2026-01-01T00:00:00Z"`.
         var comps = URLComponents(url: base.appendingPathComponent("\(spaceID)/messages"), resolvingAgainstBaseURL: false)!
         var items: [URLQueryItem] = [
             URLQueryItem(name: "pageSize", value: String(pageSize)),
@@ -83,6 +84,7 @@ enum ChatEndpoint {
             URLQueryItem(name: "showDeleted", value: "true"),
         ]
         if let pageToken { items.append(URLQueryItem(name: "pageToken", value: pageToken)) }
+        if let filter { items.append(URLQueryItem(name: "filter", value: filter)) }
         comps.queryItems = items
         return comps.url!
     }

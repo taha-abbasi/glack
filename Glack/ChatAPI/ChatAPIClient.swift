@@ -42,8 +42,8 @@ actor ChatAPIClient {
         return all
     }
 
-    func listMessages(spaceID: String, pageToken: String? = nil, pageSize: Int = 100, orderBy: String = "createTime desc") async throws -> GListMessagesResponse {
-        let url = ChatEndpoint.listMessages(spaceID: spaceID, pageToken: pageToken, pageSize: pageSize, orderBy: orderBy)
+    func listMessages(spaceID: String, pageToken: String? = nil, pageSize: Int = 100, orderBy: String = "createTime desc", filter: String? = nil) async throws -> GListMessagesResponse {
+        let url = ChatEndpoint.listMessages(spaceID: spaceID, pageToken: pageToken, pageSize: pageSize, orderBy: orderBy, filter: filter)
         return try await getJSON(url)
     }
 

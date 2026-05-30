@@ -95,6 +95,117 @@ final class Sync {
     func syncVisibleSpace(_ spaceID: String) async {
         await syncRecentMessages(spaceID: spaceID, pageSize: 50)
         await syncMembers(spaceID: spaceID)
+        // Kick a backfill chunk in the background so search + scroll-up
+        // have content. The first open of a space gets ~500 historical
+        // messages over the course of ~5 backfill chunks (pageSize 100,
+        // 5 pages max per call). Subsequent opens are no-ops once the
+        // space's backfillCompleteAt timestamp is set.
+        Task { await self.backfillSpace(spaceID) }
+    }
+
+    /// Walk back through a space's history, page by page, inserting older
+    /// messages into the local store. Idempotent — uses a `createTime <
+    /// oldestCached` filter so we don't re-fetch what we already have.
+    /// Capped at `maxPages` per call (default 5 = 500 messages) so we
+    /// don't burn Chat API quota in a single sweep. Re-running picks up
+    /// where we left off until `backfillCompleteAt` is stamped.
+    func backfillSpace(_ spaceID: String, maxPages: Int = 5) async {
+        do {
+            // Skip if we've already walked all the way back.
+            let isDone: Bool = (try? await Database.shared.read { db in
+                try Bool.fetchOne(db,
+                                  sql: "SELECT backfillCompleteAt IS NOT NULL FROM space WHERE id = ?",
+                                  arguments: [spaceID]) ?? false
+            }) ?? false
+            if isDone { return }
+
+            let oldestCachedAt: Date? = try await Database.shared.read { db in
+                try Date.fetchOne(db,
+                                  sql: "SELECT MIN(createdAt) FROM message WHERE spaceId = ?",
+                                  arguments: [spaceID])
+            }
+            // Build a `createTime <` filter from the oldest local timestamp.
+            // Pad by 1ms backward so we don't re-fetch the boundary row.
+            let filter: String?
+            if let oldest = oldestCachedAt {
+                let cutoff = oldest.addingTimeInterval(-0.001)
+                let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                filter = "createTime < \"\(f.string(from: cutoff))\""
+            } else {
+                filter = nil
+            }
+
+            var pageToken: String? = nil
+            var pagesFetched = 0
+            var insertedTotal = 0
+            var oldestSeen: Date? = oldestCachedAt
+            var hitEnd = false
+            pageLoop: while pagesFetched < maxPages {
+                let resp = try await ChatAPIClient.shared.listMessages(
+                    spaceID: spaceID, pageToken: pageToken, pageSize: 100,
+                    orderBy: "createTime desc", filter: filter
+                )
+                let messages = resp.messages ?? []
+                if messages.isEmpty {
+                    hitEnd = true
+                    break
+                }
+                try await Database.shared.write { db in
+                    for m in messages {
+                        // Don't notify or bump unreads for backfilled history.
+                        if APIDate.parse(m.deleteTime) != nil { continue }
+                        var record = MessageRecord(
+                            id: m.name,
+                            spaceId: spaceID,
+                            senderId: m.sender?.name,
+                            senderName: m.sender?.displayName,
+                            text: m.text ?? m.argumentText ?? m.formattedText,
+                            textPlain: Self.plainText(from: m),
+                            createdAt: APIDate.parse(m.createTime) ?? Date(),
+                            updatedAt: APIDate.parse(m.lastUpdateTime),
+                            threadId: m.thread?.name,
+                            deletedAt: nil,
+                            attachmentCount: m.attachment?.count ?? 0,
+                            rawJson: nil,
+                            reactionsJson: Self.encodeReactions(m.emojiReactionSummaries)
+                        )
+                        try record.save(db)
+                    }
+                }
+                insertedTotal += messages.count
+                if let oldestOnPage = messages.compactMap({ APIDate.parse($0.createTime) }).min() {
+                    if oldestSeen == nil || oldestOnPage < oldestSeen! { oldestSeen = oldestOnPage }
+                }
+                pagesFetched += 1
+                if let next = resp.nextPageToken, !next.isEmpty {
+                    pageToken = next
+                } else {
+                    hitEnd = true
+                    break pageLoop
+                }
+            }
+
+            // Persist progress.
+            try? await Database.shared.write { db in
+                if hitEnd {
+                    try db.execute(
+                        sql: "UPDATE space SET backfillCompleteAt = ?, backfillOldestSeenId = COALESCE(backfillOldestSeenId, 'done') WHERE id = ?",
+                        arguments: [Date(), spaceID]
+                    )
+                } else if let oldest = oldestSeen {
+                    // Mark progress so we can show this in diagnostics if needed.
+                    try db.execute(
+                        sql: "UPDATE space SET backfillOldestSeenId = ? WHERE id = ?",
+                        arguments: [ISO8601DateFormatter().string(from: oldest), spaceID]
+                    )
+                }
+            }
+            if insertedTotal > 0 || hitEnd {
+                Log.sync.info("backfillSpace \(spaceID, privacy: .public): +\(insertedTotal) msgs, complete=\(hitEnd ? "true" : "false", privacy: .public)")
+            }
+        } catch {
+            Log.sync.error("backfillSpace \(spaceID, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// Realtime entry points — used by EventProcessor to fold a small slice
